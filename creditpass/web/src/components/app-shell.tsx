@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import { BrowserProvider, Contract, isAddress, parseUnits } from 'ethers'
-import { ArrowLeft, ArrowUpRight, Loader2, Search, TriangleAlert, Wallet } from 'lucide-react'
+import { ArrowLeft, ArrowUpRight, Droplet, Loader2, Search, TriangleAlert, Wallet } from 'lucide-react'
 
 import { Logo } from '@/components/logo'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -26,6 +26,7 @@ const SAMPLE_ADDRESS = '0x7a3f4d1c2b9e8a5f6c0d3e2b1a9f8c7d6e5b4a30'
 
 const TABS = [
     { href: '/app', label: 'Passport' },
+    { href: '/app/directory', label: 'Directory' },
     { href: '/app/borrow', label: 'Borrow' },
     { href: '/app/earn', label: 'Earn' },
     { href: '/app/withdraw', label: 'Withdraw' },
@@ -64,6 +65,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     const [account, setAccount] = useState<string | null>(null)
     const [provider, setProvider] = useState<Eip1193Provider | null>(null)
     const [chainId, setChainId] = useState<string | null>(null)
+
+    // Deep link from the directory. Read once from the URL rather than through useSearchParams,
+    // which would force a Suspense boundary around the whole shell for one query parameter.
+    useEffect(() => {
+        const requested = new URLSearchParams(window.location.search).get('address')
+        if (requested && isAddress(requested)) {
+            setQuery(requested)
+            setAddress(requested)
+        }
+    }, [])
 
     // Wallets announce themselves; extensions that load late still arrive here.
     useEffect(() => {
@@ -362,6 +373,53 @@ export function Row({ label, value, strong }: { label: string; value: string; st
         <div className="flex items-baseline justify-between gap-4 text-sm">
             <span className="text-muted-foreground">{label}</span>
             <span className={`tabular-nums ${strong ? 'font-medium' : ''}`}>{value}</span>
+        </div>
+    )
+}
+
+/**
+ * Mints the vault's test asset to the connected wallet.
+ *
+ * TestUSD is a testnet stand-in with a public `mint`, so this is a faucet rather than a hole: the
+ * alternative is a dashboard where the supply and repay buttons can never be pressed.
+ */
+export function Faucet({ amount = 1000 }: { amount?: number }) {
+    const { snapshot, provider, wallet, refresh } = useApp()
+    const [busy, setBusy] = useState(false)
+    const [error, setError] = useState<string | null>(null)
+
+    if (!snapshot || snapshot.demo) return null
+
+    const mint = async () => {
+        setError(null)
+        setBusy(true)
+        try {
+            if (!provider) throw new Error('Connect a wallet first.')
+            await ensureCreditcoinNetwork(provider)
+            const signer = await new BrowserProvider(provider).getSigner()
+            const token = new Contract(snapshot.asset.address, ERC20_ABI, signer)
+            const value = parseUnits(String(amount), snapshot.asset.decimals)
+            await (await token.mint(await signer.getAddress(), value)).wait()
+            refresh()
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e))
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    return (
+        <div className="space-y-2">
+            <Button
+                size="sm"
+                variant="outline"
+                className="h-9 w-full"
+                disabled={!wallet || busy}
+                onClick={mint}>
+                {busy ? <Loader2 className="animate-spin" /> : <Droplet />}
+                Get {amount.toLocaleString()} test {snapshot.asset.symbol}
+            </Button>
+            {error && <p className="text-xs text-amber-600">{error}</p>}
         </div>
     )
 }

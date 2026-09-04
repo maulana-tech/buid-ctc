@@ -1,6 +1,6 @@
 'use client'
 
-import { AmountAction, Row, Stat, useApp } from '@/components/app-shell'
+import { AmountAction, Faucet, Row, Stat, useApp } from '@/components/app-shell'
 import { Card } from '@/components/ui/card'
 import { formatAmount, formatPercent } from '@/lib/creditpass'
 
@@ -106,6 +106,9 @@ export default function EarnPage() {
                         label="Supply"
                         max={snapshot.asset.balance}
                     />
+                    <div className="mt-3">
+                        <Faucet />
+                    </div>
                 </div>
             </Card>
         </div>

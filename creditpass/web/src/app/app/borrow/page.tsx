@@ -1,6 +1,6 @@
 'use client'
 
-import { AmountAction, Row, Stat, useApp } from '@/components/app-shell'
+import { AmountAction, Faucet, Row, Stat, useApp } from '@/components/app-shell'
 import { Card } from '@/components/ui/card'
 import { formatAmount, formatPercent, tierOf } from '@/lib/creditpass'
 
@@ -122,6 +122,9 @@ export default function BorrowPage() {
                             disabled={!owns || !snapshot.loan.active}
                             disabledReason={snapshot.loan.active ? 'Connect this address to repay it.' : 'No open loan.'}
                         />
+                        <div className="mt-3">
+                            <Faucet />
+                        </div>
                     </div>
                 </div>
             </Card>
