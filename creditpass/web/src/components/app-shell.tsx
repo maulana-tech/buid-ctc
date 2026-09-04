@@ -4,13 +4,22 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import { BrowserProvider, Contract, isAddress, parseUnits } from 'ethers'
-import { ArrowLeft, Loader2, Search, TriangleAlert } from 'lucide-react'
+import { ArrowLeft, ArrowUpRight, Loader2, Search, TriangleAlert, Wallet } from 'lucide-react'
 
 import { Logo } from '@/components/logo'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ADDRESSES, ERC20_ABI, LINE_ABI, isConfigured, loadSnapshot, shorten, type Snapshot } from '@/lib/creditpass'
+import { ADDRESSES, ECOSYSTEM, ERC20_ABI, LINE_ABI, explorerUrl, isConfigured, loadSnapshot, shorten, type Snapshot } from '@/lib/creditpass'
+import {
+    CREDITCOIN_TESTNET,
+    currentChainId,
+    discoverWallets,
+    ensureCreditcoinNetwork,
+    isCreditcoin,
+    type DiscoveredWallet,
+    type Eip1193Provider,
+} from '@/lib/wallet'
 
 /** An address to land on so the dashboard has something to show before you type anything. */
 const SAMPLE_ADDRESS = '0x7a3f4d1c2b9e8a5f6c0d3e2b1a9f8c7d6e5b4a30'
@@ -25,6 +34,8 @@ const TABS = [
 type AppState = {
     address: string
     wallet: string | null
+    provider: Eip1193Provider | null
+    onCreditcoin: boolean
     owns: boolean
     snapshot: Snapshot | null
     loading: boolean
@@ -47,7 +58,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
-    const [wallet, setWallet] = useState<string | null>(null)
+
+    const [wallets, setWallets] = useState<DiscoveredWallet[]>([])
+    const [picking, setPicking] = useState(false)
+    const [account, setAccount] = useState<string | null>(null)
+    const [provider, setProvider] = useState<Eip1193Provider | null>(null)
+    const [chainId, setChainId] = useState<string | null>(null)
+
+    // Wallets announce themselves; extensions that load late still arrive here.
+    useEffect(() => {
+        const seen = new Set<string>()
+        return discoverWallets((found) => {
+            if (seen.has(found.uuid)) return
+            seen.add(found.uuid)
+            setWallets((current) => [...current, found])
+        })
+    }, [])
 
     const load = useCallback(async (target: string) => {
         setLoading(true)
@@ -74,22 +100,38 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         setAddress(query)
     }
 
-    const connect = async () => {
-        const injected = (window as unknown as { ethereum?: { request: (a: { method: string }) => Promise<string[]> } }).ethereum
-        if (!injected) {
-            setError('No injected wallet found. Paste an address instead — every score is public.')
+    const connect = async (chosen: DiscoveredWallet) => {
+        setPicking(false)
+        setError(null)
+        try {
+            const accounts = (await chosen.provider.request({ method: 'eth_requestAccounts' })) as string[]
+            await ensureCreditcoinNetwork(chosen.provider)
+
+            setProvider(chosen.provider)
+            setAccount(accounts[0])
+            setChainId(await currentChainId(chosen.provider))
+            setQuery(accounts[0])
+            setAddress(accounts[0])
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e))
+        }
+    }
+
+    const onConnectClick = () => {
+        if (wallets.length === 0) {
+            setError('No wallet detected. Paste an address instead — every score is public and readable without one.')
             return
         }
-        const [account] = await injected.request({ method: 'eth_requestAccounts' })
-        setWallet(account)
-        setQuery(account)
-        setAddress(account)
+        if (wallets.length === 1) return void connect(wallets[0])
+        setPicking((open) => !open)
     }
 
     const state: AppState = {
         address,
-        wallet,
-        owns: wallet?.toLowerCase() === address.toLowerCase(),
+        wallet: account,
+        provider,
+        onCreditcoin: chainId ? isCreditcoin(chainId) : false,
+        owns: account?.toLowerCase() === address.toLowerCase(),
         snapshot,
         loading,
         error,
@@ -106,18 +148,43 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                             aria-label="home">
                             <Logo uniColor />
                         </Link>
-                        <div className="flex items-center gap-3">
+                        <div className="relative flex items-center gap-3">
                             <ThemeToggle />
-                            {wallet ? (
-                                <span className="bg-muted rounded-full px-3 py-1.5 font-mono text-xs">{shorten(wallet)}</span>
+                            {account ? (
+                                <span className="bg-muted rounded-full px-3 py-1.5 font-mono text-xs">{shorten(account)}</span>
                             ) : (
                                 <Button
                                     size="sm"
                                     variant="outline"
-                                    onClick={connect}>
-                                    Connect wallet
+                                    onClick={onConnectClick}>
+                                    <Wallet /> Connect wallet
                                 </Button>
                             )}
+
+                            {picking && (
+                                <div className="bg-popover absolute right-0 top-full z-30 mt-2 w-56 rounded-xl border p-1 shadow-xl">
+                                    {wallets.map((w) => (
+                                        <button
+                                            key={w.uuid}
+                                            type="button"
+                                            onClick={() => connect(w)}
+                                            className="hover:bg-muted flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm">
+                                            {w.icon ? (
+                                                // eslint-disable-next-line @next/next/no-img-element
+                                                <img
+                                                    src={w.icon}
+                                                    alt=""
+                                                    className="size-4 rounded"
+                                                />
+                                            ) : (
+                                                <Wallet className="size-4" />
+                                            )}
+                                            {w.name}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+
                             <Button
                                 size="sm"
                                 variant="ghost"
@@ -171,6 +238,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     </div>
 
                     {!isConfigured && <Notice>Contracts are not deployed yet. Everything below is a labelled demo, not chain data.</Notice>}
+                    {account && chainId && !isCreditcoin(chainId) && (
+                        <Notice tone="warn">
+                            Your wallet is on chain {parseInt(chainId, 16)}, not Creditcoin testnet ({parseInt(CREDITCOIN_TESTNET.chainId, 16)}).
+                            Transactions will not reach these contracts until you switch.
+                        </Notice>
+                    )}
                     {error && <Notice tone="warn">{error}</Notice>}
 
                     {loading && !snapshot ? (
@@ -180,9 +253,88 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     ) : (
                         children
                     )}
+
+                    <ContractsBar assetAddress={snapshot?.asset.address} />
+                    <EcosystemBar />
                 </main>
             </div>
         </AppContext.Provider>
+    )
+}
+
+/**
+ * Every deployed address, linked into the explorer. For a project whose entire claim is "you can
+ * check this yourself", the addresses have to be one click away on every page.
+ */
+function ContractsBar({ assetAddress }: { assetAddress?: string }) {
+    if (!isConfigured) return null
+
+    const contracts = [
+        { label: 'CreditRegistry', address: ADDRESSES.registry },
+        { label: 'LendingHistoryASC', address: ADDRESSES.asc },
+        { label: 'CreditLine vault', address: ADDRESSES.line },
+        { label: 'Asset', address: assetAddress ?? '' },
+    ].filter((c) => c.address)
+
+    return (
+        <div className="border-t pt-6">
+            <div className="text-muted-foreground mb-3 text-xs">Deployed on Creditcoin testnet</div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {contracts.map((contract) => {
+                    const href = explorerUrl('address', contract.address)
+                    // A local Anvil chain has no explorer; show the address rather than a dead link.
+                    const body = (
+                        <>
+                            <div className="group-hover:text-foreground flex items-center gap-1 text-sm font-medium">
+                                {contract.label}
+                                {href && <ArrowUpRight className="size-3.5 opacity-50" />}
+                            </div>
+                            <div className="text-muted-foreground font-mono text-xs">{shorten(contract.address)}</div>
+                        </>
+                    )
+                    return href ? (
+                        <Link
+                            key={contract.label}
+                            href={href}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="group">
+                            {body}
+                        </Link>
+                    ) : (
+                        <div key={contract.label}>{body}</div>
+                    )
+                })}
+            </div>
+        </div>
+    )
+}
+
+/** Where to get CTC for gas, a wallet to hold it, and the explorer to check the contracts. */
+function EcosystemBar() {
+    const links = [
+        { href: ECOSYSTEM.explorer, label: 'Block explorer', note: 'verify every number here' },
+        { href: ECOSYSTEM.penguinSwap, label: 'PenguinSwap', note: 'get CTC for gas' },
+        { href: ECOSYSTEM.creditWallet, label: 'Credit Wallet', note: 'official mobile wallet' },
+        { href: ECOSYSTEM.attestcoinDocs, label: 'Attestcoin docs', note: 'how the proofs work' },
+    ]
+    return (
+        <div className="grid gap-3 border-t pt-6 sm:grid-cols-2 lg:grid-cols-4">
+            {links.map((link) => (
+                <Link
+                    key={link.label}
+                    href={link.href}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="group">
+                    <div className="group-hover:text-foreground flex items-center gap-1 text-sm font-medium">
+                        {link.label}
+                        <ArrowUpRight className="size-3.5 opacity-50" />
+                    </div>
+                    <div className="text-muted-foreground text-xs">{link.note}</div>
+                </Link>
+            ))}
+        </div>
     )
 }
 
@@ -233,7 +385,7 @@ export function AmountAction({
     disabledReason?: string
     max?: bigint
 }) {
-    const { snapshot, refresh, wallet } = useApp()
+    const { snapshot, refresh, wallet, provider } = useApp()
     const [amount, setAmount] = useState('')
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState<string | null>(null)
@@ -245,9 +397,11 @@ export function AmountAction({
         setError(null)
         setBusy(true)
         try {
-            const injected = (window as unknown as { ethereum?: never }).ethereum
-            if (!injected) throw new Error('No injected wallet found.')
-            const signer = await new BrowserProvider(injected).getSigner()
+            if (!provider) throw new Error('Connect a wallet first.')
+            // Cheap insurance: the wallet may have been switched away since connecting.
+            await ensureCreditcoinNetwork(provider)
+
+            const signer = await new BrowserProvider(provider).getSigner()
             const account = await signer.getAddress()
             const value = parseUnits(amount || '0', decimals)
             const line = new Contract(ADDRESSES.line, LINE_ABI, signer)

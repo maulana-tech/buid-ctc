@@ -5,7 +5,7 @@ import { ArrowUpRight, Check } from 'lucide-react'
 
 import { Notice, Stat, useApp } from '@/components/app-shell'
 import { Card } from '@/components/ui/card'
-import { ACTION_LABELS, ADDRESSES, EXPLORER, PROTOCOL_NAMES, formatAmount, historySpan, shorten, tierOf } from '@/lib/creditpass'
+import { ACTION_LABELS, ADDRESSES, EXPLORER, PROTOCOL_NAMES, explorerUrl, formatAmount, historySpan, shorten, tierOf } from '@/lib/creditpass'
 
 export default function PassportPage() {
     const { snapshot } = useApp()
@@ -125,7 +125,7 @@ export default function PassportPage() {
                     </div>
                     {ADDRESSES.asc && EXPLORER && (
                         <Link
-                            href={`${EXPLORER}/address/${ADDRESSES.asc}`}
+                            href={explorerUrl('address', ADDRESSES.asc)}
                             className="text-muted-foreground hover:text-foreground flex items-center gap-1 text-sm">
                             ASC contract <ArrowUpRight className="size-3.5" />
                         </Link>
@@ -147,7 +147,7 @@ export default function PassportPage() {
                                     <th>Event</th>
                                     <th>Source block</th>
                                     <th>Query id</th>
-                                    <th className="text-right">Verified</th>
+                                    <th className="text-right">Proof tx</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y">
@@ -160,9 +160,20 @@ export default function PassportPage() {
                                         <td className="font-mono text-xs">#{entry.sourceBlock.toLocaleString()}</td>
                                         <td className="text-muted-foreground font-mono text-xs">{shorten(entry.queryId)}</td>
                                         <td className="text-right">
-                                            <span className="bg-foreground text-background inline-flex size-4 items-center justify-center rounded-full">
-                                                <Check className="size-2.5" />
-                                            </span>
+                                            {entry.txHash ? (
+                                                <Link
+                                                    href={explorerUrl('tx', entry.txHash)}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 font-mono text-xs">
+                                                    {shorten(entry.txHash)}
+                                                    <ArrowUpRight className="size-3" />
+                                                </Link>
+                                            ) : (
+                                                <span className="bg-foreground text-background inline-flex size-4 items-center justify-center rounded-full">
+                                                    <Check className="size-2.5" />
+                                                </span>
+                                            )}
                                         </td>
                                     </tr>
                                 ))}

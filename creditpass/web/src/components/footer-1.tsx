@@ -22,6 +22,15 @@ const footerLinks = [
         ],
     },
     {
+        name: 'Ecosystem',
+        links: [
+            { href: 'https://creditcoin-testnet.blockscout.com', label: 'Block explorer' },
+            { href: 'https://penguinswap.org', label: 'PenguinSwap' },
+            { href: 'https://penguinbase.com', label: 'PenguinBase' },
+            { href: 'https://creditcoin.org/Credit-Wallet', label: 'Credit Wallet' },
+        ],
+    },
+    {
         name: 'Build',
         links: [
             { href: 'https://github.com/', label: 'GitHub' },
@@ -35,7 +44,7 @@ export default function Footer() {
     return (
         <footer>
             <div className="mx-auto max-w-7xl space-y-16 px-6 pb-16 pt-32">
-                <div className="grid grid-cols-2 gap-x-3 gap-y-12 sm:grid-cols-4">
+                <div className="grid grid-cols-2 gap-x-3 gap-y-12 sm:grid-cols-3 lg:grid-cols-5">
                     <div className="max-lg:col-span-full">
                         <Link
                             href="/"
