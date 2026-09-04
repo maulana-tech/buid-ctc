@@ -175,7 +175,9 @@ web/                          Next.js landing page + dashboard
 | `/app` | Passport — score, profile, attested history across protocols |
 | `/app/borrow` | Credit line, borrow and repay |
 | `/app/earn` | Supply APR, utilisation, deposit |
+| `/app/directory` | Every passport in the registry — discovery, not just lookup |
 | `/app/withdraw` | Redeem shares, with the liquidity cap shown up front |
+| `GET /api/score/<address>` | The score as JSON. No key, no signup |
 
 ## Getting started
 
@@ -453,6 +455,15 @@ being scored is genuine mainnet borrowing history from genuine wallets.
   defending against.
 
 ## Ecosystem integration
+
+Built in rather than linked out — an outbound link is not a feature:
+
+| Feature | Ecosystem equivalent | What it does |
+| --- | --- | --- |
+| **Passport directory** (`/app/directory`) | PenguinBase's discovery hub | Lists every address the registry has scored, read from its own events. Without it you must already know an address, which rather undermines "the score is public" |
+| **Proof provenance** (expand any history row) | a block explorer, for our own data | Names the source chain, block, emitting pool, query id and Creditcoin proof transaction — with the source block linked to Etherscan so the original borrowing can be read at first hand |
+| **Public score API** (`/api/score/<address>`) | Credal's on-chain credit API | Contracts read the registry with `scoreOf()`; everything off-chain reads it here. A primitive nobody can call is just an application |
+| **Test asset faucet** | a swap, for acquiring the asset | TestUSD mints freely, so the supply and repay buttons can actually be pressed. A DEX would be the wrong tool: there is nothing to price and PenguinSwap already exists |
 
 Wired in:
 
