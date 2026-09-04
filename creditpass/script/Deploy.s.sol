@@ -6,6 +6,7 @@ import {Script, console} from "forge-std/Script.sol";
 import {CreditRegistry} from "../contracts/CreditRegistry.sol";
 import {LendingHistoryASC} from "../contracts/LendingHistoryASC.sol";
 import {CreditLine} from "../contracts/CreditLine.sol";
+import {ShareMarket} from "../contracts/ShareMarket.sol";
 import {TestUSD} from "../contracts/TestUSD.sol";
 
 /// @notice Deploys the stack and wires reporter permissions. Protocol sources are registered
@@ -25,6 +26,9 @@ contract Deploy is Script {
         TestUSD usd = new TestUSD();
         CreditLine line = new CreditLine(usd, registry, limitUnit);
 
+        // Lets a depositor exit while their capital is out on loan.
+        ShareMarket market = new ShareMarket(line);
+
         // Only these two may write credit profiles.
         registry.setReporter(address(asc), true);
         registry.setReporter(address(line), true);
@@ -40,6 +44,7 @@ contract Deploy is Script {
         console.log("CREDIT_REGISTRY_ADDRESS=%s", address(registry));
         console.log("LENDING_HISTORY_ASC_ADDRESS=%s", address(asc));
         console.log("CREDIT_LINE_ADDRESS=%s", address(line));
+        console.log("SHARE_MARKET_ADDRESS=%s", address(market));
         console.log("TEST_USD_ADDRESS=%s", address(usd));
     }
 }

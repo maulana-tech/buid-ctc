@@ -81,6 +81,7 @@ history feeds, so the score is one reputation across both chains.
 | `CreditRegistry.sol` | The primitive. One non-transferable profile per address; scores 0–1000, plus a bitmask of which protocols contributed. Only registered reporters may write. |
 | `LendingHistoryASC.sol` | The ASC. Verifies an Attestcoin proof and records the entry. Protocols are **configuration, not code**: pool address, event signature and borrower topic index are stored per protocol id. |
 | `CreditLine.sol` | ERC4626 vault. Depositors supply and earn; borrowers draw against their score with no collateral; defaults are written off against depositors. |
+| `ShareMarket.sol` | Escrowed order book for vault shares. Exists because `maxWithdraw` is capped by liquidity: a depositor whose capital is out on loan sells the position instead of waiting. |
 | `TestUSD.sol` | Testnet-only mintable stablecoin stand-in. |
 
 ### Protocols
@@ -153,7 +154,7 @@ Two design points worth naming:
 
 ```
 contracts/                    Solidity — registry, ASC, ERC4626 credit line
-test/                         Foundry tests (40)
+test/                         Foundry tests (49)
 test/fixtures/                real mainnet proofs, replayed through the real decoder
 test/mocks/                   stand-in for the 0xFD2 precompile
 worker/protocols.ts           The protocol table — one source of truth
@@ -177,6 +178,7 @@ web/                          Next.js landing page + dashboard
 | `/app/earn` | Supply APR, utilisation, deposit |
 | `/app/directory` | Every passport in the registry — discovery, not just lookup |
 | `/app/withdraw` | Redeem shares, with the liquidity cap shown up front |
+| `/app/swap` | Secondary market for vault shares — the way out when the pool is fully lent |
 | `GET /api/score/<address>` | The score as JSON. No key, no signup |
 
 ## Getting started
@@ -407,7 +409,7 @@ being scored is genuine mainnet borrowing history from genuine wallets.
 
 - **`check:sigs` passes** against live mainnet logs for all three protocols — nine signatures, each
   carrying the four topics the decoders assume.
-- **40 Foundry tests pass** across two suites. The unit suite covers scoring, the spam guard,
+- **49 Foundry tests pass** across three suites. The unit suite covers scoring, the spam guard,
   per-protocol topic indexing, emitter binding, chain-key pinning, and the vault's deposit / borrow /
   repay / withdraw / default paths.
 - **The decoder has been run against real Ethereum transactions.** `test/RealProof.t.sol` replays
@@ -449,6 +451,8 @@ being scored is genuine mainnet borrowing history from genuine wallets.
   Calling a locked balance "collateral" would be a lie. Enforcement here is reputational, which is
   how real-world credit works: nobody repossesses your house over a late card payment, your score
   takes the hit.
+- **The share market fills whole offers only.** Partial fills need pro-rata maths and a minimum
+  size to stop dust listings; worth adding when someone wants to buy half a position.
 - **Interest is not accrued into `totalAssets` until repayment.** The share price steps up when a
   loan is repaid rather than drifting up per block, so a depositor who joins just before a large
   repayment captures interest they did not fund. A per-block index fixes it when that is worth
@@ -463,7 +467,8 @@ Built in rather than linked out — an outbound link is not a feature:
 | **Passport directory** (`/app/directory`) | PenguinBase's discovery hub | Lists every address the registry has scored, read from its own events. Without it you must already know an address, which rather undermines "the score is public" |
 | **Proof provenance** (expand any history row) | a block explorer, for our own data | Names the source chain, block, emitting pool, query id and Creditcoin proof transaction — with the source block linked to Etherscan so the original borrowing can be read at first hand |
 | **Public score API** (`/api/score/<address>`) | Credal's on-chain credit API | Contracts read the registry with `scoreOf()`; everything off-chain reads it here. A primitive nobody can call is just an application |
-| **Test asset faucet** | a swap, for acquiring the asset | TestUSD mints freely, so the supply and repay buttons can actually be pressed. A DEX would be the wrong tool: there is nothing to price and PenguinSwap already exists |
+| **Test asset faucet** | a faucet, not a swap | TestUSD mints freely, so the supply and repay buttons can actually be pressed |
+| **Share market** (`/app/swap`) | PenguinSwap, but for something only this app has | A secondary market for vault shares. Not an AMM: the vault already reports NAV exactly, so offers priced against it need no curve, no liquidity providers and no oracle. It shows the pool's credit quality — utilisation, eligible borrowers, average borrower score — because a share is a claim on uncollateralised loans, and those borrowers are only assessable at all because their records were proved through Attestcoin |
 
 Wired in:
 

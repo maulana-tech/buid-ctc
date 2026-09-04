@@ -77,6 +77,8 @@ async function main() {
         LIMIT_UNIT,
     ])
 
+    const market = await deploy('ShareMarket', 'ShareMarket.sol/ShareMarket.json', wallet, [await line.getAddress()])
+
     // 3. Only these two may write credit profiles.
     console.log('\nWiring reporters')
     await (await registry.setReporter(await asc.getAddress(), true)).wait()
@@ -146,6 +148,15 @@ async function main() {
     const devLimit = await line.creditLimit(account.address)
     console.log(`  ${account.address}  score ${devScore}  limit ${devLimit / 1_000_000n} tUSD`)
 
+    // 7b. One live offer, so the swap page has a book to show.
+    console.log('\nListing a share offer')
+    const offerShares = parseUnits('25000', 6)
+    await (await line.approve(await market.getAddress(), offerShares)).wait()
+    const nav = (await line.convertToAssets(offerShares)) as bigint
+    const ask = (nav * 97n) / 100n // 3% discount for leaving early
+    await (await market.list(offerShares, ask)).wait()
+    console.log(`  25,000 shares asking ${ask / 1_000_000n} tUSD (NAV ${nav / 1_000_000n})`)
+
     // 8. Point the dashboard at all of it.
     const env = [
         `NEXT_PUBLIC_CREDITCOIN_RPC_URL=${RPC}`,
@@ -153,6 +164,7 @@ async function main() {
         `NEXT_PUBLIC_CREDIT_REGISTRY_ADDRESS=${await registry.getAddress()}`,
         `NEXT_PUBLIC_LENDING_HISTORY_ASC_ADDRESS=${await asc.getAddress()}`,
         `NEXT_PUBLIC_CREDIT_LINE_ADDRESS=${await line.getAddress()}`,
+        `NEXT_PUBLIC_SHARE_MARKET_ADDRESS=${await market.getAddress()}`,
         '',
     ].join('\n')
     writeFileSync(new URL('../web/.env.local', import.meta.url), env)
