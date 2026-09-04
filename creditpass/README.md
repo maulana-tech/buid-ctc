@@ -282,35 +282,32 @@ chain, for free. This is also the fastest way to rehearse the demo.
 
 ### 4. Deploy to Creditcoin testnet
 
+**See [DEPLOY.md](./DEPLOY.md) for the full walkthrough** — wallet, faucet, preflight, verification
+and the failure paths worth testing. The short version:
+
 ```bash
-forge script script/Deploy.s.sol \
-  --rpc-url $CREDITCOIN_RPC_URL --broadcast \
-  --private-key $CREDITCOIN_WALLET_PRIVATE_KEY
+npm run deploy:testnet
 ```
 
-It prints four addresses. Paste them into `.env`:
+It preflights the chain, the key and the balance before spending anything, then deploys all five
+contracts, wires the reporters, registers the three protocols, seeds the vault, and writes
+`web/.env.local`. It prints the addresses — paste them into `.env` too, so the worker can find the
+ASC:
 
 ```ini
 CREDIT_REGISTRY_ADDRESS=0x…
 LENDING_HISTORY_ASC_ADDRESS=0x…
 CREDIT_LINE_ADDRESS=0x…
+SHARE_MARKET_ADDRESS=0x…
 ```
-
-The script also seeds the vault with test liquidity, so there is something to borrow.
 
 ---
 
-### 5. Register the protocols on-chain
+### 5. Adding a protocol later
 
-```bash
-npm run register:protocols
-```
-
-This writes the table from `worker/protocols.ts` into the ASC — one `registerSource` plus three
-`setEventSpec` calls per protocol. Until you run it, every proof is rejected with `UnknownProtocol`.
-
-This is also how you add a fourth protocol later: add it to `protocols.ts`, run `check:sigs`, run
-this again. No redeploy.
+`npm run register:protocols` writes the table from `worker/protocols.ts` into an already-deployed
+ASC — one `registerSource` plus three `setEventSpec` calls per protocol. Adding a fourth protocol is
+that command, not a redeploy: add it to `protocols.ts`, run `check:sigs`, run this.
 
 ---
 
