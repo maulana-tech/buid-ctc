@@ -37,11 +37,31 @@ export const PROTOCOL_NAMES: Record<number, string> = {
     2: 'Morpho Blue',
 }
 
+/** Etherscan, for linking an attested entry back to the source chain it came from. */
+export const SOURCE_EXPLORERS: Record<number, { name: string; url: string }> = {
+    3: { name: 'Ethereum', url: 'https://etherscan.io' },
+    1: { name: 'Sepolia', url: 'https://sepolia.etherscan.io' },
+}
+
+export function sourceExplorerUrl(chainKey: number, kind: 'block' | 'address' | 'tx', value: string | number) {
+    const explorer = SOURCE_EXPLORERS[chainKey]
+    return explorer ? `${explorer.url}/${kind}/${value}` : ''
+}
+
+/** Pool addresses, so a proof can be traced to the exact contract that emitted it. */
+export const PROTOCOL_POOLS: Record<number, string> = {
+    0: '0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2',
+    1: '0xC13e21B648A5Ee794902342038FF3aDAB66BE987',
+    2: '0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb',
+}
+
 export const REGISTRY_ABI = [
     'function isKnown(address) view returns (bool)',
     'function scoreOf(address) view returns (uint16)',
     'function protocolCount(address) view returns (uint8)',
     'function profileOf(address) view returns (tuple(uint32 repayments, uint32 borrows, uint32 liquidations, uint32 defaults, uint64 firstSeenBlock, uint64 lastCountedBlock, uint32 protocols))',
+    'event RepaymentRecorded(address indexed user, uint16 protocolId, uint64 sourceBlock, uint16 newScore)',
+    'event LiquidationRecorded(address indexed user, uint16 protocolId, uint64 sourceBlock, uint16 newScore)',
 ]
 
 export const LINE_ABI = [
@@ -70,6 +90,9 @@ export const ASC_ABI = [
 ]
 
 export const ERC20_ABI = [
+    // TestUSD mints freely on purpose — it is a testnet stand-in, and without a faucet nobody can
+    // try supplying or repaying.
+    'function mint(address,uint256)',
     'function decimals() view returns (uint8)',
     'function symbol() view returns (string)',
     'function balanceOf(address) view returns (uint256)',
@@ -92,6 +115,7 @@ export type HistoryEntry = {
     protocolId: number
     action: number
     sourceBlock: number
+    chainKey: number
     queryId: string
     /** The Creditcoin transaction that carried the proof — links straight into the explorer. */
     txHash: string
@@ -187,16 +211,77 @@ const DEMO: Snapshot = {
     },
     asset: { address: '0x0000000000000000000000000000000000000000', symbol: 'tUSD', decimals: 6, balance: 4_200_000_000n },
     history: [
-        { protocolId: 0, action: 0, sourceBlock: 21_948_306, queryId: '0x8f0ab391fcf8c145', txHash: '' },
-        { protocolId: 2, action: 0, sourceBlock: 21_731_884, queryId: '0x092a78e3f7e4a61b', txHash: '' },
-        { protocolId: 1, action: 2, sourceBlock: 21_502_117, queryId: '0xf53386ad295dfa9a', txHash: '' },
-        { protocolId: 0, action: 0, sourceBlock: 20_884_002, queryId: '0xe413a321e8681d83', txHash: '' },
+        { protocolId: 0, action: 0, sourceBlock: 21_948_306, chainKey: 3, queryId: '0x8f0ab391fcf8c145', txHash: '' },
+        { protocolId: 2, action: 0, sourceBlock: 21_731_884, chainKey: 3, queryId: '0x092a78e3f7e4a61b', txHash: '' },
+        { protocolId: 1, action: 2, sourceBlock: 21_502_117, chainKey: 3, queryId: '0xf53386ad295dfa9a', txHash: '' },
+        { protocolId: 0, action: 0, sourceBlock: 20_884_002, chainKey: 3, queryId: '0xe413a321e8681d83', txHash: '' },
     ],
 }
 
 export function demoSnapshot(): Snapshot {
     return DEMO
 }
+
+export type DirectoryEntry = {
+    address: string
+    score: number
+    repayments: number
+    liquidations: number
+    protocolCount: number
+}
+
+/**
+ * Every address the registry has scored, newest activity first.
+ *
+ * Read from events rather than a contract-side index: an on-chain array would cost every writer gas
+ * forever to serve a page nobody has to trust. The registry stays a lookup; discovery lives here.
+ */
+export async function loadDirectory(limit = 50): Promise<DirectoryEntry[]> {
+    if (!isConfigured) return DEMO_DIRECTORY
+
+    const rpc = provider()
+    const registry = new Contract(ADDRESSES.registry, REGISTRY_ABI, rpc)
+
+    const [repayments, liquidations] = await Promise.all([
+        registry.queryFilter(registry.filters.RepaymentRecorded()),
+        registry.queryFilter(registry.filters.LiquidationRecorded()),
+    ])
+
+    const seen = new Map<string, number>()
+    for (const log of [...repayments, ...liquidations]) {
+        const user = (log as unknown as { args: [string] }).args[0]
+        seen.set(user, Math.max(seen.get(user) ?? 0, log.blockNumber))
+    }
+
+    const addresses = [...seen.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, limit)
+        .map(([address]) => address)
+
+    return Promise.all(
+        addresses.map(async (address) => {
+            const [score, profile, protocolCount] = await Promise.all([
+                registry.scoreOf(address) as Promise<bigint>,
+                registry.profileOf(address),
+                registry.protocolCount(address) as Promise<bigint>,
+            ])
+            return {
+                address,
+                score: Number(score),
+                repayments: Number(profile[0]),
+                liquidations: Number(profile[2]),
+                protocolCount: Number(protocolCount),
+            }
+        })
+    )
+}
+
+const DEMO_DIRECTORY: DirectoryEntry[] = [
+    { address: '0x7a3f4d1c2b9e8a5f6c0d3e2b1a9f8c7d6e5b4a30', score: 742, repayments: 14, liquidations: 0, protocolCount: 3 },
+    { address: '0x3078a7b42dc121faea89e3cdac74f0b2f54546f7', score: 615, repayments: 11, liquidations: 0, protocolCount: 2 },
+    { address: '0x8297492d220371015398fd063382e827cf741070', score: 540, repayments: 9, liquidations: 1, protocolCount: 1 },
+    { address: '0x3b7e7b3a5d441860713431fbc42fe33db4345752', score: 325, repayments: 1, liquidations: 0, protocolCount: 1 },
+]
 
 export async function loadSnapshot(address: string): Promise<Snapshot> {
     if (!isConfigured) return DEMO
@@ -250,6 +335,9 @@ export async function loadSnapshot(address: string): Promise<Snapshot> {
                         protocolId: Number(args[1]),
                         action: Number(args[2]),
                         sourceBlock: Number(args[3]),
+                        // The ASC only accepts one chain per protocol, so the source chain is
+                        // implied by the protocol id rather than carried in the event.
+                        chainKey: 3,
                         queryId: args[4],
                         txHash: log.transactionHash,
                     }
