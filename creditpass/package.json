@@ -1,0 +1,27 @@
+{
+  "name": "creditpass",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "forge build",
+    "test": "forge test -vv",
+    "check:sigs": "tsx worker/check-sigs.ts",
+    "worker": "tsx worker/index.ts",
+    "register:protocols": "tsx script/register-protocols.ts"
+  },
+  "dependencies": {
+    "@gluwa/asc-contracts": "0.2.1",
+    "@gluwa/usc-sdk": "0.18.0",
+    "@openzeppelin/contracts": "5.4.0",
+    "dotenv": "17.4.2",
+    "ethers": "^6.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.0",
+    "forge-std": "^1.1.2",
+    "tsx": "^4.22.4",
+    "typescript": "^5.9.0"
+  }
+}

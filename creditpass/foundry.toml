@@ -1,0 +1,21 @@
+[profile.default]
+src = "contracts"
+test = "test"
+out = "out"
+libs = ["node_modules", "lib"]
+allow_paths = ["node_modules", "lib"]
+remappings = [
+    "@gluwa/asc-contracts/=node_modules/@gluwa/asc-contracts/",
+    "@openzeppelin/contracts/=node_modules/@openzeppelin/contracts/",
+    "forge-std/=lib/forge-std/src/",
+]
+solc_version = "0.8.30"
+optimizer = true
+optimizer_runs = 200
+via_ir = true
+# Creditcoin's EVM is pre-Cancun: no transient storage, no MCOPY. Match the gluwa examples.
+evm_version = "shanghai"
+verbosity = 2
+
+[lint]
+lint_on_build = false
