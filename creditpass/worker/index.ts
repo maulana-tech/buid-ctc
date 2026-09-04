@@ -22,6 +22,10 @@ const ABI = JSON.parse(
 const CHUNK = 2_000
 const GAS_BUFFER_PCT = 135n
 
+// Deep history takes the builder ~15s to assemble; the SDK's 10s default gives up first and the
+// failure looks like "not attested". Measured: 1 month ≈ 2s, 4 months ≈ 6s, 10 months ≈ 15s.
+const PROOF_TIMEOUT_MS = 60_000
+
 function env(key: string): string {
     const value = process.env[key]
     if (!value) throw new Error(`${key} is not set (copy .env.example to .env)`)
@@ -147,7 +151,7 @@ async function main() {
     const builders = new Map<number, proofProvider.service.ProofBuilder>()
     const builderFor = (chainKey: number) => {
         if (!builders.has(chainKey)) {
-            builders.set(chainKey, new proofProvider.service.ProofBuilder(chainKey, env('PROOF_BUILDER_URL')))
+            builders.set(chainKey, new proofProvider.service.ProofBuilder(chainKey, env('PROOF_BUILDER_URL'), PROOF_TIMEOUT_MS))
         }
         return builders.get(chainKey)!
     }
