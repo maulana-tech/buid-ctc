@@ -9,7 +9,13 @@
     "test": "forge test -vv",
     "check:sigs": "tsx worker/check-sigs.ts",
     "worker": "tsx worker/index.ts",
-    "register:protocols": "tsx script/register-protocols.ts"
+    "register:protocols": "tsx script/register-protocols.ts",
+    "check:attestation": "tsx worker/check-attestation.ts",
+    "make:fixtures": "tsx script/make-fixtures.ts",
+    "check:abi": "tsx script/check-abi.ts",
+    "verify": "npm run check:abi && forge build && forge test",
+    "local": "tsx script/local.ts",
+    "anvil": "anvil --chain-id 102031"
   },
   "dependencies": {
     "@gluwa/asc-contracts": "0.2.1",

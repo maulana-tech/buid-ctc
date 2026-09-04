@@ -153,12 +153,17 @@ Two design points worth naming:
 
 ```
 contracts/                    Solidity — registry, ASC, ERC4626 credit line
-test/                         Foundry tests (30)
+test/                         Foundry tests (40)
+test/fixtures/                real mainnet proofs, replayed through the real decoder
+test/mocks/                   stand-in for the 0xFD2 precompile
 worker/protocols.ts           The protocol table — one source of truth
 worker/index.ts               Off-chain readability worker, all protocols
 worker/check-sigs.ts          Verifies every signature against live mainnet logs
 script/Deploy.s.sol           Deployment + reporter wiring
 script/register-protocols.ts  Writes the protocol table on-chain
+script/local.ts               Whole stack on a local Anvil chain, no funds needed
+script/make-fixtures.ts       Captures real proofs for the tests
+script/check-abi.ts           Dashboard ABIs vs compiled contracts
 web/                          Next.js landing page + dashboard
 ```
 
@@ -247,6 +252,29 @@ Occasional `??  unverified` lines are fine: they mean the event is rare and did 
 scanned window, not that it is wrong. `FAIL` lines are real.
 
 ---
+
+### 3.5 Run the whole thing locally, with no testnet funds
+
+Before touching a real network, bring the full stack up on Anvil. The one thing a local chain cannot
+have is the `0xFD2` verifier — it is a pallet-evm runtime precompile with no bytecode, so there is
+nothing to fork or deploy. `anvil_setCode` puts the test mock there instead; **everything else is
+the real thing**, including real mainnet proofs replayed from `test/fixtures`.
+
+```bash
+npm run anvil          # terminal 1 — anvil --chain-id 102031, matching Creditcoin testnet
+npm run local          # terminal 2 — deploy, wire, register, seed, submit real proofs
+cd web && pnpm dev     # terminal 3
+```
+
+`npm run local` writes `web/.env.local` for you and prints two addresses worth looking up:
+
+- a **real Ethereum borrower** whose Aave, Spark or Morpho repayment was proved onto the local chain
+- the **Anvil dev account**, given a synthetic 8-repayment history so the borrow, repay, supply and
+  withdraw flows can actually be exercised. That history is local-only and deliberately synthetic —
+  the fixtures prove one repayment each, nowhere near the 500 the credit line opens at.
+
+Import the printed dev key into a wallet and every button on the dashboard works, against a real
+chain, for free. This is also the fastest way to rehearse the demo.
 
 ### 4. Deploy to Creditcoin testnet
 
@@ -339,6 +367,17 @@ pnpm build && pnpm start
 
 ---
 
+### Regenerating the proof fixtures
+
+```bash
+npm run make:fixtures         # newest Repay per protocol
+npm run make:fixtures Repay Borrow Liquidation
+```
+
+Fixtures are committed so the tests run offline. Regenerate them when the protocol table changes, or
+when you want the tests pinned to fresher chain data. Each one records the transaction hash and the
+borrower the test asserts on, so a fixture is auditable against the explorer.
+
 ### Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -349,7 +388,12 @@ pnpm build && pnpm start
 | `UnknownProtocol` on submit | step 5 was skipped | `npm run register:protocols` |
 | `WrongEmitter` | pool address wrong for that chain | check `worker/protocols.ts` against the explorer |
 | Gas estimation warning | pallet-evm does not always surface precompile reverts | harmless, the worker falls back to a size-based limit |
+| `check:abi` reports DRIFT | a contract changed, the dashboard did not | update the ABI string it names in `web/src/lib/creditpass.ts` |
+| Fixture test fails after a contract change | the event or decoder path moved | re-read the failure; the fixtures are real chain data and do not go stale on their own |
 | Dashboard shows the demo banner | `NEXT_PUBLIC_*` addresses unset | fill `web/.env.local`, restart `pnpm dev` |
+| `npm run local` says "no chain" | Anvil is not running | `npm run anvil` in another terminal |
+| `anvil_setCode did not take` | the RPC is not Anvil | point `LOCAL_RPC_URL` at an Anvil instance |
+| Local borrow button disabled | wallet is not the dev account | import the key `npm run local` prints |
 
 ### Environments
 
@@ -361,12 +405,40 @@ being scored is genuine mainnet borrowing history from genuine wallets.
 
 - **`check:sigs` passes** against live mainnet logs for all three protocols — nine signatures, each
   carrying the four topics the decoders assume.
-- **30 Foundry tests pass**, covering scoring, the spam guard, per-protocol topic indexing, emitter
-  binding, chain-key pinning, and the vault's deposit / borrow / repay / withdraw / default paths.
-- **Not yet verified end-to-end on Creditcoin testnet.** The open question is whether historical
-  mainnet blocks are attested far enough back for the proof builder to serve proofs for them. If
-  attestation only covers recent blocks, the scan window collapses to whatever is attested. This is
-  the first thing to test, before anything else gets built on top.
+- **40 Foundry tests pass** across two suites. The unit suite covers scoring, the spam guard,
+  per-protocol topic indexing, emitter binding, chain-key pinning, and the vault's deposit / borrow /
+  repay / withdraw / default paths.
+- **The decoder has been run against real Ethereum transactions.** `test/RealProof.t.sol` replays
+  genuine Aave V3, Spark and Morpho Blue mainnet transactions, with genuine proofs fetched from the
+  live Proof Builder, through the real `EvmV1Decoder` — RLP receipt decoding, log selection, emitter
+  binding, topic indexing, and the query-id dedupe. Only the `0xFD2` precompile is mocked, because it
+  is a pallet-evm runtime precompile with no bytecode and so cannot be forked or deployed locally.
+  Everything downstream of the cryptographic check is exercised for real.
+- **Dashboard ABIs are checked against the contracts** by `npm run check:abi`, so a renamed function
+  fails the build rather than the first on-chain read.
+- **Historical attestation is confirmed, and it goes deep.** This was the project's biggest open
+  risk: if Ethereum were only attested near the tip, "years of borrowing history" would not exist.
+  It does. Measured against the live testnet proof builder (`npm run check:attestation`):
+
+  | Source block | Age | Result |
+  | --- | --- | --- |
+  | 25,883,406 | 1 day | proof in ~2s |
+  | 25,702,887 | ~1 month | proof in ~3s |
+  | 24,902,888 | ~4 months | proof in ~6s |
+  | 23,402,899 | ~10 months | proof in 15s |
+  | 20,900,000 | ~20 months | proof in 15s |
+  | 18,500,000 | ~2.5 years | proof in 10s |
+  | 16,600,000 | ~3.2 years | proof in 14s |
+
+  Creditcoin testnet reports Ethereum mainnet attested to height 25,902,840 — effectively the chain
+  tip — and the builder serves proofs all the way back to the Aave V3 launch era.
+
+  One trap found doing this: the SDK's `ProofBuilder` defaults to a **10 second** HTTP timeout, and
+  deep history takes ~15s to assemble. The failure surfaces as "not yet attested", which points at
+  exactly the wrong cause. The worker now passes 60s explicitly.
+
+- **Still not deployed.** No contract of this project has ever been on Creditcoin. The proof
+  pipeline above was exercised read-only, without a wallet.
 - **The frontend is not wired to a chain yet.** With the contract addresses unset it renders a
   clearly-labelled demo, and the ABIs in `web/src/lib/creditpass.ts` are hand-written from the
   contracts — a mismatch would only surface on first deploy.
@@ -380,12 +452,39 @@ being scored is genuine mainnet borrowing history from genuine wallets.
   repayment captures interest they did not fund. A per-block index fixes it when that is worth
   defending against.
 
+## Ecosystem integration
+
+Wired in:
+
+| What | Where | Why |
+| --- | --- | --- |
+| **Blockscout** (`creditcoin-testnet.blockscout.com`) | every contract address and every proof transaction in the dashboard | the whole claim is "check it yourself" — the addresses have to be one click away |
+| **EIP-6963 wallet discovery** | `web/src/lib/wallet.ts` | Credit Wallet is a mobile app with an in-app browser, not a desktop extension, so assuming a single `window.ethereum` is wrong. Announced providers cover extensions, in-app browsers, and several wallets at once, with a legacy fallback |
+| **Network switching** | `ensureCreditcoinNetwork` | without it a borrow or deposit is signed on whatever chain the wallet happened to be on. Adds Creditcoin testnet (chainId 102031) if the wallet does not know it |
+| **PenguinSwap / PenguinBase / Credit Wallet** | dashboard footer bar and site footer | where to get CTC for gas, a wallet to hold it, and where the dApp will be listed |
+
+Deliberately **not** wired in:
+
+- **PenguinBridge.** This project exists to show a bridge is not needed for cross-chain reads.
+  Linking one would undercut the argument.
+- **A swap of our own.** PenguinSwap is the ecosystem's official DEX. Building a competing one
+  inside a hackathon run by that ecosystem is a poor trade, and it would add no Attestcoin depth.
+- **PenguinSwap as a liquidation venue.** The right integration, but it needs Attestcoin
+  writability first — there is nothing to liquidate until enforcement can reach the source chain.
+- **Credal.** Gluwa's on-chain credit API records real-world loans; CreditPass reads on-chain loans
+  from other chains. Opposite directions, one borrower, one reputation. Access is through an API and
+  a partnership rather than a permissionless contract call, so it stays a roadmap item — but
+  `CreditRegistry.setReporter()` already separates who may write from how the score is computed, so
+  a Credal adapter plugs in as a second reporter with no change to `CreditLine`.
+
 ## Roadmap
 
 1. End-to-end proof on Creditcoin testnet, mainnet history.
 2. More sources — the table in `worker/protocols.ts` plus one transaction each. Other chains once
    Attestcoin attests them.
 3. Registry adopted by other Creditcoin dApps as a shared primitive.
+4. Credal adapter — real-world credit history alongside DeFi history, one score across both.
+5. PenguinBase listing, then mainnet.
 4. When Attestcoin **writability** ships: real cross-chain collateral, enforceable liquidation, and
    with it a genuine cross-chain money market. The enforcement layer is kept separate from the
    scoring layer so it can be dropped in without touching the score.
