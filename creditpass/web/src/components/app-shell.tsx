@@ -30,6 +30,7 @@ const TABS = [
     { href: '/app/borrow', label: 'Borrow' },
     { href: '/app/earn', label: 'Earn' },
     { href: '/app/withdraw', label: 'Withdraw' },
+    { href: '/app/swap', label: 'Swap' },
 ]
 
 type AppState = {
@@ -284,13 +285,14 @@ function ContractsBar({ assetAddress }: { assetAddress?: string }) {
         { label: 'CreditRegistry', address: ADDRESSES.registry },
         { label: 'LendingHistoryASC', address: ADDRESSES.asc },
         { label: 'CreditLine vault', address: ADDRESSES.line },
+        { label: 'ShareMarket', address: ADDRESSES.market },
         { label: 'Asset', address: assetAddress ?? '' },
     ].filter((c) => c.address)
 
     return (
         <div className="border-t pt-6">
             <div className="text-muted-foreground mb-3 text-xs">Deployed on Creditcoin testnet</div>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                 {contracts.map((contract) => {
                     const href = explorerUrl('address', contract.address)
                     // A local Anvil chain has no explorer; show the address rather than a dead link.

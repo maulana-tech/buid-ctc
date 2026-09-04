@@ -21,6 +21,7 @@ export const ADDRESSES = {
     registry: process.env.NEXT_PUBLIC_CREDIT_REGISTRY_ADDRESS ?? '',
     asc: process.env.NEXT_PUBLIC_LENDING_HISTORY_ASC_ADDRESS ?? '',
     line: process.env.NEXT_PUBLIC_CREDIT_LINE_ADDRESS ?? '',
+    market: process.env.NEXT_PUBLIC_SHARE_MARKET_ADDRESS ?? '',
 }
 
 /** Until the contracts are deployed there is nothing to read, and the dashboard says so. */
@@ -83,6 +84,15 @@ export const LINE_ABI = [
     'function repay(uint256)',
     'function deposit(uint256 assets, address receiver) returns (uint256)',
     'function withdraw(uint256 assets, address receiver, address owner) returns (uint256)',
+]
+
+export const MARKET_ABI = [
+    'function openOffers() view returns (uint256[])',
+    'function offers(uint256) view returns (tuple(address seller, uint128 shares, uint128 askAssets, bool active))',
+    'function navOf(uint256) view returns (uint256)',
+    'function list(uint128 shares, uint128 askAssets) returns (uint256)',
+    'function cancel(uint256)',
+    'function fill(uint256)',
 ]
 
 export const ASC_ABI = [
@@ -221,6 +231,62 @@ const DEMO: Snapshot = {
 export function demoSnapshot(): Snapshot {
     return DEMO
 }
+
+export type Offer = {
+    id: number
+    seller: string
+    shares: bigint
+    askAssets: bigint
+    nav: bigint
+    /** Negative means the seller is asking below what the vault would redeem for. */
+    discountBps: number
+}
+
+/** The open book, cheapest relative to NAV first — the best deal for a buyer sits at the top. */
+export async function loadOffers(): Promise<Offer[]> {
+    if (!isConfigured || !ADDRESSES.market) return DEMO_OFFERS
+
+    const rpc = provider()
+    const market = new Contract(ADDRESSES.market, MARKET_ABI, rpc)
+    const ids = (await market.openOffers()) as bigint[]
+
+    const offers = await Promise.all(
+        ids.map(async (id) => {
+            const [offer, nav] = await Promise.all([market.offers(id), market.navOf(id) as Promise<bigint>])
+            const shares = offer[1] as bigint
+            const askAssets = offer[2] as bigint
+            return {
+                id: Number(id),
+                seller: offer[0] as string,
+                shares,
+                askAssets,
+                nav,
+                discountBps: nav === 0n ? 0 : Number(((nav - askAssets) * 10_000n) / nav),
+            }
+        })
+    )
+
+    return offers.sort((a, b) => b.discountBps - a.discountBps)
+}
+
+const DEMO_OFFERS: Offer[] = [
+    {
+        id: 0,
+        seller: '0x7a3f4d1c2b9e8a5f6c0d3e2b1a9f8c7d6e5b4a30',
+        shares: 25_000_000_000n,
+        askAssets: 24_870_000_000n,
+        nav: 25_640_000_000n,
+        discountBps: 300,
+    },
+    {
+        id: 1,
+        seller: '0x3078a7b42dc121faea89e3cdac74f0b2f54546f7',
+        shares: 5_000_000_000n,
+        askAssets: 5_100_000_000n,
+        nav: 5_128_000_000n,
+        discountBps: 55,
+    },
+]
 
 export type DirectoryEntry = {
     address: string
