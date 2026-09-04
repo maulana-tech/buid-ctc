@@ -31,6 +31,7 @@ contract CreditPassTest is Test {
 
     address internal alice = address(0xA11CE);
     address internal lender = address(0x1E4DE2);
+    address internal bob = address(0xB0B);
     address internal reporter = address(this);
 
     uint64 internal constant GAP = 7200;
@@ -130,6 +131,33 @@ contract CreditPassTest is Test {
         // Same protocol again must not double-count.
         registry.recordRepayment(alice, AAVE, 1_000_000 + 2 * (GAP + 1));
         assertEq(registry.protocolCount(alice), 2);
+    }
+
+    /// The spam guard is global, not per-protocol, and that is deliberate: otherwise a farmer
+    /// cycles Aave, Spark and Morpho in one afternoon and books three repayments for a day's work.
+    /// The protocol is still recorded — we did observe activity there — but it does not earn points.
+    function test_spamGuardAppliesAcrossProtocolsNotJustWithinOne() public {
+        registry.recordRepayment(alice, AAVE, 1_000_000);
+        registry.recordRepayment(alice, MORPHO_ID, 1_000_050); // same day, different protocol
+
+        assertEq(registry.profileOf(alice).repayments, 1, "second same-day repayment should not count");
+        assertEq(registry.protocolCount(alice), 2, "but both protocols were seen");
+
+        registry.recordRepayment(alice, MORPHO_ID, 1_000_000 + GAP + 1);
+        assertEq(registry.profileOf(alice).repayments, 2);
+    }
+
+    /// Breadth alone must not move the score — only time-separated repayments do.
+    function test_scoreCountsRepaymentsNotProtocols() public {
+        registry.recordRepayment(alice, AAVE, 1_000_000);
+        uint16 oneProtocol = registry.scoreOf(alice);
+
+        registry.recordRepayment(bob, AAVE, 1_000_000);
+        registry.recordRepayment(bob, 1, 1_000_010);
+        registry.recordRepayment(bob, MORPHO_ID, 1_000_020);
+
+        assertEq(registry.protocolCount(bob), 3);
+        assertEq(registry.scoreOf(bob), oneProtocol, "three protocols in one day is still one repayment");
     }
 
     function test_protocolIdMustFitTheBitmask() public {
