@@ -17,5 +17,8 @@ via_ir = true
 evm_version = "shanghai"
 verbosity = 2
 
+# Real-proof fixtures captured from the live Proof Builder. Read-only, scoped to that folder.
+fs_permissions = [{ access = "read", path = "./test/fixtures" }]
+
 [lint]
 lint_on_build = false
