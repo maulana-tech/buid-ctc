@@ -1,5 +1,11 @@
 node_modules/
-out/
-cache/
+
+# Foundry build artefacts and vendored libraries — anchored to the repo root on purpose.
+# Unanchored, `lib/` also matches web/src/lib/ and silently drops the dashboard's data layer.
+/out/
+/cache/
+/lib/
+
+# Secrets, at any depth.
 .env
-lib/
+.env.local
