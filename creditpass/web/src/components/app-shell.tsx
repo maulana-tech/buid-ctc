@@ -55,8 +55,14 @@ export function useApp() {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
     const pathname = usePathname()
-    const [query, setQuery] = useState(SAMPLE_ADDRESS)
-    const [address, setAddress] = useState(SAMPLE_ADDRESS)
+    const [query, setQuery] = useState(() => {
+        if (typeof window !== 'undefined') {
+            const requested = new URLSearchParams(window.location.search).get('address')
+            if (requested && isAddress(requested)) return requested
+        }
+        return SAMPLE_ADDRESS
+    })
+    const [address, setAddress] = useState(query)
     const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
@@ -67,23 +73,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     const [provider, setProvider] = useState<Eip1193Provider | null>(null)
     const [chainId, setChainId] = useState<string | null>(null)
 
-    // Deep link from the directory. Read once from the URL rather than through useSearchParams,
-    // which would force a Suspense boundary around the whole shell for one query parameter.
-    useEffect(() => {
-        const requested = new URLSearchParams(window.location.search).get('address')
-        if (requested && isAddress(requested)) {
-            setQuery(requested)
-            setAddress(requested)
-        }
-    }, [])
-
     // Wallets announce themselves; extensions that load late still arrive here.
     useEffect(() => {
-        const seen = new Set<string>()
         return discoverWallets((found) => {
-            if (seen.has(found.uuid)) return
-            seen.add(found.uuid)
-            setWallets((current) => [...current, found])
+            setWallets((current) => {
+                if (current.some((w) => w.uuid === found.uuid)) return current
+                return [...current, found]
+            })
         })
     }, [])
 
@@ -101,8 +97,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }, [])
 
     useEffect(() => {
-        void load(address)
-    }, [address, load])
+        let active = true
+        loadSnapshot(address)
+            .then((data) => {
+                if (active) {
+                    setSnapshot(data)
+                    setError(null)
+                    setLoading(false)
+                }
+            })
+            .catch((e) => {
+                if (active) {
+                    setError(e instanceof Error ? e.message : String(e))
+                    setSnapshot(null)
+                    setLoading(false)
+                }
+            })
+        return () => {
+            active = false
+        }
+    }, [address])
 
     const lookup = () => {
         if (!isAddress(query)) {
