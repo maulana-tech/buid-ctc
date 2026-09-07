@@ -84,6 +84,12 @@ export const LINE_ABI = [
     'function repay(uint256)',
     'function deposit(uint256 assets, address receiver) returns (uint256)',
     'function withdraw(uint256 assets, address receiver, address owner) returns (uint256)',
+    'function totalSupply() view returns (uint256)',
+    'function TERM_BLOCKS() view returns (uint64)',
+    'event Deposit(address indexed sender, address indexed owner, uint256 assets, uint256 shares)',
+    'event Withdraw(address indexed sender, address indexed receiver, address indexed owner, uint256 assets, uint256 shares)',
+    'event Repaid(address indexed borrower, uint256 amount, bool closed)',
+    'event Defaulted(address indexed borrower, uint256 shortfall)',
 ]
 
 export const MARKET_ABI = [
@@ -505,6 +511,163 @@ const DEMO_HISTORY: PriceHistory = {
     trades: [
         { block: 5_412_000, time: 1_756_180_000, shares: 25_000_000_000n, paid: 24_350_000_000n, pricePerShare: 974_000n, txHash: '' },
         { block: 5_431_500, time: 1_756_472_500, shares: 5_000_000_000n, paid: 5_045_000_000n, pricePerShare: 1_009_000n, txHash: '' },
+    ],
+}
+
+/** The connected wallet's vault position, with what it has actually earned. */
+export type VaultPosition = {
+    address: string
+    shares: bigint
+    shareValue: bigint
+    /** Assets put in minus assets taken out, from the vault's own Deposit/Withdraw events. */
+    netDeposited: bigint
+    /**
+     * Weighted average share price this wallet deposited at, from its Deposit events. Null when it
+     * never deposited — shares bought on the market have an entry price the vault never saw.
+     */
+    entryPrice: bigint | null
+    /**
+     * shares × (current share price − entry price). Per share held, not cash-flow based, so shares
+     * moved into market escrow or sold do not show up as a loss. Negative only after a default has
+     * been written off against depositors. Null when the entry price is unknown.
+     */
+    earned: bigint | null
+    maxWithdraw: bigint
+    assetBalance: bigint
+    deposits: number
+    withdrawals: number
+}
+
+/**
+ * Cost basis comes from the vault's ERC4626 events rather than a stored number: the vault does not
+ * keep one per depositor, and an off-chain ledger would be one more thing to trust. Shares bought
+ * on the market show up here as value without a deposit — which is correct, the buyer paid the
+ * seller, not the vault.
+ */
+export async function loadVaultPosition(address: string): Promise<VaultPosition> {
+    if (!isConfigured) return DEMO_POSITION
+
+    const rpc = provider()
+    const line = new Contract(ADDRESSES.line, LINE_ABI, rpc)
+    const token = new Contract(await line.asset(), ERC20_ABI, rpc)
+
+    const [shares, maxWithdraw, assetBalance, depositLogs, withdrawLogs] = await Promise.all([
+        line.balanceOf(address) as Promise<bigint>,
+        line.maxWithdraw(address) as Promise<bigint>,
+        token.balanceOf(address) as Promise<bigint>,
+        queryLogsChunked(line, line.filters.Deposit(null, address), rpc),
+        queryLogsChunked(line, line.filters.Withdraw(null, null, address), rpc),
+    ])
+    const shareValue = (await line.convertToAssets(shares)) as bigint
+
+    const sum = (logs: unknown[], index: number) =>
+        logs.reduce<bigint>((acc, log) => acc + ((log as { args: unknown[] }).args[index] as bigint), 0n)
+    const assetsIn = sum(depositLogs, 2)
+    const sharesIn = sum(depositLogs, 3)
+    const netDeposited = assetsIn - sum(withdrawLogs, 3)
+
+    const decimals = BigInt(await token.decimals())
+    const unit = 10n ** decimals
+    const entryPrice = sharesIn > 0n ? (assetsIn * unit) / sharesIn : null
+    const earned = entryPrice === null ? null : shareValue - (shares * entryPrice) / unit
+
+    return {
+        address,
+        shares,
+        shareValue,
+        netDeposited,
+        entryPrice,
+        earned,
+        maxWithdraw,
+        assetBalance,
+        deposits: depositLogs.length,
+        withdrawals: withdrawLogs.length,
+    }
+}
+
+const DEMO_POSITION: VaultPosition = {
+    address: '0x0000000000000000000000000000000000000000',
+    shares: 25_000_000_000n,
+    shareValue: 25_650_000_000n,
+    netDeposited: 25_000_000_000n,
+    entryPrice: 1_000_000n,
+    earned: 650_000_000n,
+    maxWithdraw: 25_650_000_000n,
+    assetBalance: 4_200_000_000n,
+    deposits: 2,
+    withdrawals: 0,
+}
+
+/** Vault-level history: what one share redeemed for, and how much the vault held, over the window. */
+export type VaultHistory = {
+    points: { time: number; block: number; sharePrice: bigint; totalAssets: bigint; utilisationBps: number }[]
+    events: { time: number; kind: 'repaid' | 'defaulted'; amount: bigint; txHash: string }[]
+    decimals: number
+}
+
+export async function loadVaultHistory(samples = 40): Promise<VaultHistory> {
+    if (!isConfigured) return DEMO_VAULT_HISTORY
+
+    const rpc = provider()
+    const line = new Contract(ADDRESSES.line, LINE_ABI, rpc)
+    const decimals = Number(await new Contract(await line.asset(), ERC20_ABI, rpc).decimals())
+    const unit = 10n ** BigInt(decimals)
+
+    const head = await rpc.getBlockNumber()
+    const from = DEPLOY_BLOCK > 0 ? DEPLOY_BLOCK : Math.max(0, head - DEFAULT_LOOKBACK)
+    const step = Math.max(1, Math.floor((head - from) / (samples - 1)))
+    const blocks = Array.from({ length: samples }, (_, i) => Math.min(head, from + i * step))
+    if (blocks[blocks.length - 1] !== head) blocks.push(head)
+
+    const points = (
+        await Promise.all(
+            blocks.map(async (block) => {
+                try {
+                    const [sharePrice, totalAssets, utilisationBps, blk] = await Promise.all([
+                        line.convertToAssets(unit, { blockTag: block }) as Promise<bigint>,
+                        line.totalAssets({ blockTag: block }) as Promise<bigint>,
+                        line.utilisationBps({ blockTag: block }) as Promise<bigint>,
+                        rpc.getBlock(block),
+                    ])
+                    return { time: Number(blk?.timestamp ?? 0), block, sharePrice, totalAssets, utilisationBps: Number(utilisationBps) }
+                } catch {
+                    return null
+                }
+            })
+        )
+    ).filter((p): p is NonNullable<typeof p> => p !== null)
+
+    const [repaid, defaulted] = await Promise.all([
+        queryLogsChunked(line, line.filters.Repaid(), rpc),
+        queryLogsChunked(line, line.filters.Defaulted(), rpc),
+    ])
+    const events = await Promise.all(
+        [
+            ...repaid.map((l) => ({ log: l, kind: 'repaid' as const })),
+            ...defaulted.map((l) => ({ log: l, kind: 'defaulted' as const })),
+        ].map(async ({ log, kind }) => ({
+            time: Number((await rpc.getBlock(log.blockNumber))?.timestamp ?? 0),
+            kind,
+            amount: (log as unknown as { args: unknown[] }).args[1] as bigint,
+            txHash: log.transactionHash,
+        }))
+    )
+
+    return { points, events: events.sort((a, b) => a.time - b.time), decimals }
+}
+
+const DEMO_VAULT_HISTORY: VaultHistory = {
+    decimals: 6,
+    points: Array.from({ length: 40 }, (_, i) => ({
+        time: 1_756_000_000 + i * 21_600,
+        block: 5_400_000 + i * 1_440,
+        sharePrice: 1_000_000n + BigInt(Math.floor(i * i * 16)) ,
+        totalAssets: 1_000_000_000_000n + BigInt(i) * 12_500_000_000n,
+        utilisationBps: Math.min(6000, 800 + i * 140),
+    })),
+    events: [
+        { time: 1_756_216_000, kind: 'repaid', amount: 120_000_000n, txHash: '' },
+        { time: 1_756_540_000, kind: 'repaid', amount: 310_000_000n, txHash: '' },
     ],
 }
 
