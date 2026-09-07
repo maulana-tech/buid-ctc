@@ -1,3 +1,5 @@
+import { LiveStats } from '@/components/live-stats'
+
 export default function StatsSection() {
     return (
         <section className="py-16 md:py-20">
@@ -25,6 +27,7 @@ export default function StatsSection() {
                         </div>
                     </div>
                 </div>
+                <LiveStats />
             </div>
         </section>
     )
