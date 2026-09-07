@@ -81,7 +81,7 @@ history feeds, so the score is one reputation across both chains.
 | `CreditRegistry.sol` | The primitive. One non-transferable profile per address; scores 0–1000, plus a bitmask of which protocols contributed. Only registered reporters may write. |
 | `LendingHistoryASC.sol` | The ASC. Verifies an Attestcoin proof and records the entry. Protocols are **configuration, not code**: pool address, event signature and borrower topic index are stored per protocol id. |
 | `CreditLine.sol` | ERC4626 vault. Depositors supply and earn; borrowers draw against their score with no collateral; defaults are written off against depositors. |
-| `ShareMarket.sol` | Escrowed order book for vault shares. Exists because `maxWithdraw` is capped by liquidity: a depositor whose capital is out on loan sells the position instead of waiting. |
+| `ShareMarket.sol` | Escrowed order book for vault shares, with whole and partial fills at the listed per-share price. Exists because `maxWithdraw` is capped by liquidity: a depositor whose capital is out on loan sells the position instead of waiting. |
 | `TestUSD.sol` | Testnet-only mintable stablecoin stand-in. |
 
 ### Protocols
@@ -154,7 +154,7 @@ Two design points worth naming:
 
 ```
 contracts/                    Solidity — registry, ASC, ERC4626 credit line
-test/                         Foundry tests (49)
+test/                         Foundry tests (54)
 test/fixtures/                real mainnet proofs, replayed through the real decoder
 test/mocks/                   stand-in for the 0xFD2 precompile
 worker/protocols.ts           The protocol table — one source of truth
@@ -178,7 +178,7 @@ web/                          Next.js landing page + dashboard
 | `/app/earn` | Supply APR, utilisation, deposit |
 | `/app/directory` | Every passport in the registry — discovery, not just lookup |
 | `/app/withdraw` | Redeem shares, with the liquidity cap shown up front |
-| `/app/swap` | Secondary market for vault shares — the way out when the pool is fully lent |
+| `/app/swap` | Secondary market for vault shares, laid out as a swap: TradingView chart of redemption value and trades on the left, "you pay / you receive" on the right |
 | `GET /api/score/<address>` | The score as JSON. No key, no signup |
 
 ## Getting started
@@ -406,7 +406,7 @@ being scored is genuine mainnet borrowing history from genuine wallets.
 
 - **`check:sigs` passes** against live mainnet logs for all three protocols — nine signatures, each
   carrying the four topics the decoders assume.
-- **49 Foundry tests pass** across three suites. The unit suite covers scoring, the spam guard,
+- **54 Foundry tests pass** across four suites. The unit suite covers scoring, the spam guard,
   per-protocol topic indexing, emitter binding, chain-key pinning, and the vault's deposit / borrow /
   repay / withdraw / default paths.
 - **The decoder has been run against real Ethereum transactions.** `test/RealProof.t.sol` replays
@@ -446,7 +446,7 @@ being scored is genuine mainnet borrowing history from genuine wallets.
   | CreditRegistry | [`0x6d4d017d…D9Ea`](https://creditcoin-testnet.blockscout.com/address/0x6d4d017dE8d0A36dce7856Ee989624C6A18cD9Ea) |
   | LendingHistoryASC | [`0xD04A92C8…33E6`](https://creditcoin-testnet.blockscout.com/address/0xD04A92C83AFe71f4f69F9FAD0A33229BFBdE33E6) |
   | CreditLine | [`0x970C3114…2185`](https://creditcoin-testnet.blockscout.com/address/0x970C3114C5Dcf853692bc8D3e0598d1AC9D12185) |
-  | ShareMarket | [`0xEAfd45D5…f3A9`](https://creditcoin-testnet.blockscout.com/address/0xEAfd45D5E7ECCF6014D91D9e3da39134C347f3A9) |
+  | ShareMarket | [`0x9833C746…fE1e`](https://creditcoin-testnet.blockscout.com/address/0x9833C746a7ef59BbA70bDb27073d04ED8B9EfE1e) |
   | TestUSD | [`0x44b99f76…876D`](https://creditcoin-testnet.blockscout.com/address/0x44b99f76f12e0Ece22f6bD76DcB305Afcf25876D) |
 
   Three real Ethereum mainnet repayments proved through the live block-prover precompile — one per
@@ -469,8 +469,9 @@ being scored is genuine mainnet borrowing history from genuine wallets.
   Calling a locked balance "collateral" would be a lie. Enforcement here is reputational, which is
   how real-world credit works: nobody repossesses your house over a late card payment, your score
   takes the hit.
-- **The share market fills whole offers only.** Partial fills need pro-rata maths and a minimum
-  size to stop dust listings; worth adding when someone wants to buy half a position.
+- **Partial fills have no minimum size.** A buyer can take one raw unit of an offer, which costs
+  the seller a rounding of at most one unit in their favour and could be used to spam
+  `PartiallyFilled` events. Add a minimum fill if the book ever gets busy enough for that to matter.
 - **Interest is not accrued into `totalAssets` until repayment.** The share price steps up when a
   loan is repaid rather than drifting up per block, so a depositor who joins just before a large
   repayment captures interest they did not fund. A per-block index fixes it when that is worth
@@ -486,7 +487,7 @@ Built in rather than linked out — an outbound link is not a feature:
 | **Proof provenance** (expand any history row) | a block explorer, for our own data | Names the source chain, block, emitting pool, query id and Creditcoin proof transaction — with the source block linked to Etherscan so the original borrowing can be read at first hand |
 | **Public score API** (`/api/score/<address>`) | Credal's on-chain credit API | Contracts read the registry with `scoreOf()`; everything off-chain reads it here. A primitive nobody can call is just an application |
 | **Test asset faucet** | a faucet, not a swap | TestUSD mints freely, so the supply and repay buttons can actually be pressed |
-| **Share market** (`/app/swap`) | PenguinSwap, but for something only this app has | A secondary market for vault shares. Not an AMM: the vault already reports NAV exactly, so offers priced against it need no curve, no liquidity providers and no oracle. It shows the pool's credit quality — utilisation, eligible borrowers, average borrower score — because a share is a claim on uncollateralised loans, and those borrowers are only assessable at all because their records were proved through Attestcoin |
+| **Share market** (`/app/swap`) | PenguinSwap, but for something only this app has | A secondary market for vault shares with a swap's shape: **you pay / you receive**, a flip, and a TradingView chart (`lightweight-charts`) of redemption value per share with trades marked at what buyers paid. Underneath it is an escrowed order book, not an AMM — the vault already reports NAV exactly, so offers priced against it need no curve, no liquidity providers and no oracle. "You pay X" plans across the cheapest listed offers and fills the last one partially, so X means exactly X. It shows the pool's credit quality — utilisation, eligible borrowers, average borrower score — because a share is a claim on uncollateralised loans, and those borrowers are only assessable at all because their records were proved through Attestcoin |
 
 Wired in:
 

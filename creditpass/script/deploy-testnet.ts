@@ -104,6 +104,15 @@ async function main() {
     await (await line.deposit(VAULT_SEED, account.address)).wait()
     console.log(`  ${VAULT_SEED / 1_000_000n} tUSD supplied — ordinary ERC4626 shares, no special rights`)
 
+    // One live offer, so the swap page opens with a book rather than an empty state.
+    console.log('\nListing a share offer')
+    const offerShares = parseUnits('25000', 6)
+    await (await line.approve(await market.getAddress(), offerShares)).wait()
+    const nav = (await line.convertToAssets(offerShares)) as bigint
+    const ask = (nav * 97n) / 100n // 3% off redemption value — the price of leaving early
+    await (await market.list(offerShares, ask)).wait()
+    console.log(`  25,000 shares asking ${ask / 1_000_000n} tUSD against ${nav / 1_000_000n} redemption value`)
+
     // The dashboard scans logs from here rather than block 0 — the public RPC times out at 10s and
     // will not serve an unbounded range.
     const deployBlock = await provider.getBlockNumber()
