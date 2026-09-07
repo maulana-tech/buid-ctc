@@ -174,3 +174,80 @@ contract ShareMarketTest is Test {
         market.list(0, 99e6);
     }
 }
+
+contract ShareMarketPartialFillTest is Test {
+    CreditRegistry internal registry;
+    CreditLine internal line;
+    ShareMarket internal market;
+    MockERC20 internal token;
+
+    address internal lender = address(0x1E4DE2);
+    address internal buyer = address(0xB0FFEE);
+
+    function setUp() public {
+        registry = new CreditRegistry();
+        token = new MockERC20();
+        line = new CreditLine(token, registry, 100e6);
+        market = new ShareMarket(line);
+
+        token.mint(lender, 1_000e6);
+        vm.startPrank(lender);
+        token.approve(address(line), type(uint256).max);
+        line.deposit(1_000e6, lender);
+        line.approve(address(market), type(uint256).max);
+        market.list(100e6, 97e6); // 100 shares for 97 — 0.97 each
+        vm.stopPrank();
+
+        token.mint(buyer, 1_000e6);
+        vm.prank(buyer);
+        token.approve(address(market), type(uint256).max);
+    }
+
+    /// The whole point: "you pay X" has to be able to mean exactly X worth of the book.
+    function test_partialFillPaysProRataAndLeavesTheRest() public {
+        uint256 before = token.balanceOf(lender);
+
+        vm.prank(buyer);
+        market.fillPartial(0, 40e6);
+
+        assertEq(line.balanceOf(buyer), 40e6, "buyer got the shares");
+        assertEq(token.balanceOf(lender) - before, 38.8e6, "seller paid 40 x 0.97");
+
+        ShareMarket.Offer memory rest = market.offers(0);
+        assertTrue(rest.active);
+        assertEq(rest.shares, 60e6);
+        assertEq(rest.askAssets, 58.2e6, "remaining ask keeps the same per-share price");
+    }
+
+    /// Rounding must never favour the buyer: a seller gets at least what they asked per share.
+    function test_partialFillRoundsUpInSellersFavour() public {
+        // 100 shares for 97 assets; buying 1 raw unit costs ceil(97/100) = 1, not 0.
+        uint256 before = token.balanceOf(lender);
+        vm.prank(buyer);
+        market.fillPartial(0, 1);
+        assertEq(token.balanceOf(lender) - before, 1);
+    }
+
+    function test_partialFillOfEverythingClosesTheOffer() public {
+        vm.prank(buyer);
+        market.fillPartial(0, 100e6);
+        assertFalse(market.offers(0).active);
+        assertEq(market.openOffers().length, 0);
+    }
+
+    function test_cannotBuyMoreThanOffered() public {
+        vm.prank(buyer);
+        vm.expectRevert(abi.encodeWithSelector(ShareMarket.ExceedsOffer.selector, uint128(101e6), uint128(100e6)));
+        market.fillPartial(0, 101e6);
+    }
+
+    function test_cancelAfterPartialFillReturnsOnlyTheRemainder() public {
+        vm.prank(buyer);
+        market.fillPartial(0, 30e6);
+
+        uint256 before = line.balanceOf(lender);
+        vm.prank(lender);
+        market.cancel(0);
+        assertEq(line.balanceOf(lender) - before, 70e6);
+    }
+}

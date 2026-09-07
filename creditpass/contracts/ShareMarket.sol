@@ -35,12 +35,14 @@ contract ShareMarket {
     event Listed(uint256 indexed id, address indexed seller, uint128 shares, uint128 askAssets);
     event Cancelled(uint256 indexed id, address indexed seller);
     event Filled(uint256 indexed id, address indexed seller, address indexed buyer, uint128 shares, uint128 paidAssets);
+    event PartiallyFilled(uint256 indexed id, address indexed buyer, uint128 shares, uint128 paidAssets, uint128 remainingShares);
 
     error ZeroAmount();
     error NoSuchOffer(uint256 id);
     error OfferClosed(uint256 id);
     error NotSeller(address caller, address seller);
     error CannotFillOwnOffer();
+    error ExceedsOffer(uint128 requested, uint128 available);
 
     constructor(CreditLine vault) {
         VAULT = vault;
@@ -74,19 +76,49 @@ contract ShareMarket {
     }
 
     /// @notice Buy the whole offer: assets to the seller, escrowed shares to you.
-    /// @dev ponytail: whole offers only. Partial fills need pro-rata maths and a minimum size to
-    ///      stop dust listings; add them when someone actually wants to buy half a position.
     function fill(uint256 id) external {
         Offer storage offer = _at(id);
         if (!offer.active) revert OfferClosed(id);
         // Self-filling would look like volume while moving nothing. Cancel instead.
         if (offer.seller == msg.sender) revert CannotFillOwnOffer();
 
+        uint128 shares = offer.shares;
+        uint128 paid = offer.askAssets;
         offer.active = false;
-        ASSET.safeTransferFrom(msg.sender, offer.seller, offer.askAssets);
-        SHARE.safeTransfer(msg.sender, offer.shares);
+        offer.shares = 0;
+        offer.askAssets = 0;
 
-        emit Filled(id, offer.seller, msg.sender, offer.shares, offer.askAssets);
+        ASSET.safeTransferFrom(msg.sender, offer.seller, paid);
+        SHARE.safeTransfer(msg.sender, shares);
+
+        emit Filled(id, offer.seller, msg.sender, shares, paid);
+    }
+
+    /// @notice Buy part of an offer at its listed per-share price.
+    /// @dev The buyer pays pro-rata, rounded up so a seller never receives less per share than they
+    ///      asked for. The remainder stays on the book at the same price. A swap-style "you pay X"
+    ///      input is only honest if a buyer can take exactly X worth, which whole-offer fills forbid.
+    function fillPartial(uint256 id, uint128 sharesToBuy) external {
+        Offer storage offer = _at(id);
+        if (!offer.active) revert OfferClosed(id);
+        if (offer.seller == msg.sender) revert CannotFillOwnOffer();
+        if (sharesToBuy == 0) revert ZeroAmount();
+        if (sharesToBuy > offer.shares) revert ExceedsOffer(sharesToBuy, offer.shares);
+
+        uint128 paid = uint128((uint256(offer.askAssets) * sharesToBuy + offer.shares - 1) / offer.shares);
+
+        offer.shares -= sharesToBuy;
+        offer.askAssets -= paid;
+        if (offer.shares == 0) offer.active = false;
+
+        ASSET.safeTransferFrom(msg.sender, offer.seller, paid);
+        SHARE.safeTransfer(msg.sender, sharesToBuy);
+
+        if (offer.active) {
+            emit PartiallyFilled(id, msg.sender, sharesToBuy, paid, offer.shares);
+        } else {
+            emit Filled(id, offer.seller, msg.sender, sharesToBuy, paid);
+        }
     }
 
     // ------------------------------------------------------------------ reads
