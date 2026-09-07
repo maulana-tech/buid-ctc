@@ -5,11 +5,12 @@ const footerLinks = [
     {
         name: 'Product',
         links: [
-            { href: '/app', label: 'Dashboard' },
-            { href: '#how-it-works', label: 'How it works' },
-            { href: '#attested-history', label: 'Attested history' },
-            { href: '#credit-score', label: 'Credit score' },
-            { href: '#credit-line', label: 'Credit line' },
+            { href: '/app', label: 'Passport' },
+            { href: '/app/directory', label: 'Directory' },
+            { href: '/app/borrow', label: 'Borrow' },
+            { href: '/app/earn', label: 'Earn' },
+            { href: '/app/swap', label: 'Share market' },
+            { href: '/api/score/0x3078a7b42dc121faea89e3cdac74f0b2f54546f7', label: 'Score API' },
         ],
     },
     {
@@ -33,7 +34,7 @@ const footerLinks = [
     {
         name: 'Build',
         links: [
-            { href: 'https://github.com/', label: 'GitHub' },
+            { href: 'https://github.com/maulana-tech/buid-ctc', label: 'GitHub' },
             { href: 'https://github.com/gluwa/attestcoin-protocol-examples', label: 'Protocol examples' },
             { href: 'https://buidl.creditcoin.org/', label: 'BUIDL CTC' },
         ],

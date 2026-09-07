@@ -12,7 +12,7 @@ const menuItems = [
     { name: 'How it works', href: '#how-it-works' },
     { name: 'Product', href: '#attested-history' },
     { name: 'Docs', href: 'https://docs.attestcoin.org/' },
-    { name: 'GitHub', href: 'https://github.com/' },
+    { name: 'GitHub', href: 'https://github.com/maulana-tech/buid-ctc' },
 ]
 
 export const HeroHeader = () => {

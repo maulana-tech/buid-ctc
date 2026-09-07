@@ -172,7 +172,7 @@ web/                          Next.js landing page + dashboard
 
 | Route | What it does |
 | --- | --- |
-| `/` | Landing page |
+| `/` | Landing page. Its figures strip is read from the deployed contracts — passports scored, history entries proved, vault size, supply APR, utilisation, open share offers — through the same loaders the dashboard uses. A pitch that says "verifiable" and quotes hardcoded numbers undercuts itself |
 | `/app` | Passport — score, profile, attested history across protocols |
 | `/app/borrow` | Credit line, borrow and repay |
 | `/app/earn` | Supply APR and where it comes from, a line chart of share price / vault size / utilisation over the window, and the connected wallet's position — value, yield against its entry share price, supply and withdraw in one card, and a projection that is arithmetic on today's rate, not a promise |

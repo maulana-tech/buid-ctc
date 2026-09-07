@@ -18,7 +18,7 @@ export default function HeroSection() {
                                     <div className="max-w-xl">
                                         <h1 className="text-balance text-5xl md:text-6xl">Credit that travels across chains</h1>
                                         <p className="text-muted-foreground mt-5 max-w-md text-balance text-lg">
-                                            Borrow on Creditcoin with no collateral. Your Ethereum repayment record is the collateral — and it is proved, not reported.
+                                            Borrow on Creditcoin with no collateral. Your repayment record on Aave, Spark and Morpho is the collateral — and it is proved, not reported.
                                         </p>
                                     </div>
 
