@@ -1,6 +1,6 @@
 'use client'
 
-import { Ban, Boxes, Calculator, Check, Fingerprint, Gavel, Link2, Percent, ScrollText, Share2, ShieldAlert, TrendingDown, Wallet, type LucideIcon } from 'lucide-react'
+import { ArrowLeftRight, Ban, Boxes, Calculator, Check, Coins, Fingerprint, Gavel, Link2, Lock, Percent, Scissors, ScrollText, Share2, ShieldAlert, TrendingDown, Wallet, type LucideIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 
@@ -9,6 +9,8 @@ const features = [
     { id: 'credit-score', label: 'Credit score' },
     { id: 'credit-line', label: 'Credit line' },
     { id: 'portable', label: 'Portable by design' },
+    { id: 'earn', label: 'Earn' },
+    { id: 'share-market', label: 'Share market' },
 ] as const
 
 type FeatureId = (typeof features)[number]['id']
@@ -33,6 +35,16 @@ const featureHighlights: Record<FeatureId, { icon: LucideIcon; label: string }[]
         { icon: Share2, label: 'Any Creditcoin contract can read it' },
         { icon: Fingerprint, label: 'Non-transferable, bound to the address' },
         { icon: Boxes, label: 'One reputation across both chains' },
+    ],
+    earn: [
+        { icon: Coins, label: 'ERC4626 shares (cpUSD), no lock-up' },
+        { icon: Percent, label: 'Rate is borrow APR × utilisation' },
+        { icon: ShieldAlert, label: 'Defaults are written off against depositors' },
+    ],
+    'share-market': [
+        { icon: ArrowLeftRight, label: 'Exit while your capital is out on loan' },
+        { icon: Lock, label: 'Listed shares sit in escrow — every offer is real' },
+        { icon: Scissors, label: 'Partial fills at the listed per-share price' },
     ],
 }
 
@@ -179,6 +191,49 @@ export default function FeaturesSection() {
                                 <RegistryIllustration />
                             </div>
                         </div>
+
+                        <div
+                            ref={(element) => {
+                                sectionRefs.current.earn = element
+                            }}
+                            id="earn"
+                            className="grid scroll-mt-32 gap-6 sm:grid-cols-2 md:grid-cols-5 lg:gap-12">
+                            <div className="flex flex-col justify-between pb-4 md:col-span-2">
+                                <div className="md:pr-6 lg:pr-0">
+                                    <h3 className="text-muted-foreground mb-6 text-sm font-medium">Earn</h3>
+                                    <p className="text-muted-foreground text-balance text-lg font-medium">
+                                        <span className="text-foreground">You are the collateral.</span> Depositors fund the vault and take the interest
+                                        borrowers pay. Idle cash earns nothing, so the rate is a fact about the pool right now, not a promise.
+                                    </p>
+                                </div>
+                                <FeatureList items={featureHighlights.earn} />
+                            </div>
+                            <div className="border-border/50 bg-foreground/2 relative flex aspect-square rounded-3xl border p-3 md:col-span-3">
+                                <EarnIllustration />
+                            </div>
+                        </div>
+
+                        <div
+                            ref={(element) => {
+                                sectionRefs.current['share-market'] = element
+                            }}
+                            id="share-market"
+                            className="grid scroll-mt-32 gap-6 sm:grid-cols-2 md:grid-cols-5 lg:gap-12">
+                            <div className="flex flex-col justify-between pb-4 md:col-span-2">
+                                <div className="md:pr-6 lg:pr-0">
+                                    <h3 className="text-muted-foreground mb-6 text-sm font-medium">Share market</h3>
+                                    <p className="text-muted-foreground text-balance text-lg font-medium">
+                                        <span className="text-foreground">The way out when the pool is fully lent.</span> Withdrawal is capped by cash on
+                                        hand, so a depositor sells the position instead — the buyer inherits the yield and the risk, and the discount is
+                                        the price of leaving early.
+                                    </p>
+                                </div>
+                                <FeatureList items={featureHighlights['share-market']} />
+                            </div>
+                            <div className="border-border/50 bg-foreground/2 relative flex aspect-square rounded-3xl border p-3 md:col-span-3">
+                                <MarketIllustration />
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -268,6 +323,69 @@ function LimitIllustration() {
                 ))}
             </ul>
             <div className="text-muted-foreground mt-4 border-t pt-3 text-[10px]">Below 500, the line stays closed.</div>
+        </Panel>
+    )
+}
+
+function EarnIllustration() {
+    return (
+        <Panel>
+            <div className="flex items-baseline justify-between">
+                <span className="text-muted-foreground text-xs">Supply APR</span>
+                <span className="text-2xl font-semibold tracking-tight">4.12%</span>
+            </div>
+            <div className="text-muted-foreground mt-1 text-[10px]">10.00% borrow rate × 41.2% utilisation</div>
+            <div className="bg-muted mt-3 h-1.5 overflow-hidden rounded-full">
+                <div className="bg-foreground h-full w-[41%] rounded-full" />
+            </div>
+            <ul className="mt-4 divide-y text-xs">
+                {[
+                    ['Share price', '1.0033 tUSD'],
+                    ['Your shares', '25,000 cpUSD'],
+                    ['Earned so far', '+82 tUSD'],
+                ].map(([label, value]) => (
+                    <li
+                        key={label}
+                        className="flex items-center justify-between py-2">
+                        <span className="text-muted-foreground">{label}</span>
+                        <span className="font-mono">{value}</span>
+                    </li>
+                ))}
+            </ul>
+            <div className="text-muted-foreground mt-3 border-t pt-3 text-[10px]">Interest lands when a loan is repaid and lifts every share.</div>
+        </Panel>
+    )
+}
+
+function MarketIllustration() {
+    const rows = [
+        ['22,000', '0.97', '3.00%'],
+        ['12,000', '0.98', '2.00%'],
+        ['3,500', '0.99', '1.00%'],
+    ]
+    return (
+        <Panel>
+            <div className="flex items-baseline justify-between">
+                <span className="text-muted-foreground text-xs">Order book</span>
+                <span className="text-muted-foreground text-[10px]">1 share redeems for 1.0000</span>
+            </div>
+            <div className="text-muted-foreground mt-3 grid grid-cols-3 text-[10px]">
+                <span>Shares</span>
+                <span className="text-right">Per share</span>
+                <span className="text-right">Discount</span>
+            </div>
+            <ul className="mt-1 space-y-1.5">
+                {rows.map(([shares, per, disc]) => (
+                    <li
+                        key={shares}
+                        className="bg-muted/60 grid grid-cols-3 rounded-lg px-2.5 py-1.5 text-xs">
+                        <span className="font-mono">{shares}</span>
+                        <span className="text-right font-mono">{per}</span>
+                        <span className="text-right text-emerald-600">{disc}</span>
+                    </li>
+                ))}
+            </ul>
+            <div className="text-muted-foreground mt-3 border-t pt-3 text-[10px]">Pay 1,000 tUSD → 1,030.93 shares from the cheapest offer. Every price is a listed price.</div>
         </Panel>
     )
 }
