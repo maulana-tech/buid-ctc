@@ -1,12 +1,12 @@
 'use client'
 
-import { AmountAction, Faucet, Row, Stat, useApp } from '@/components/app-shell'
+import { AmountAction, Faucet, Loading, Row, Stat, useApp } from '@/components/app-shell'
 import { Card } from '@/components/ui/card'
 import { formatAmount, formatPercent, tierOf } from '@/lib/creditpass'
 
 export default function BorrowPage() {
     const { snapshot, owns } = useApp()
-    if (!snapshot) return null
+    if (!snapshot) return <Loading />
 
     const { decimals, symbol } = snapshot.asset
     const tier = tierOf(snapshot.score, snapshot.minScore)

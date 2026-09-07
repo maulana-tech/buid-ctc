@@ -272,13 +272,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     )}
                     {error && <Notice tone="warn">{error}</Notice>}
 
-                    {loading && !snapshot ? (
-                        <div className="text-muted-foreground flex items-center gap-2 py-24 text-sm">
-                            <Loader2 className="size-4 animate-spin" /> Reading Creditcoin…
-                        </div>
-                    ) : (
-                        children
-                    )}
+                    {children}
 
                     <ContractsBar assetAddress={snapshot?.asset.address} />
                     <EcosystemBar />
@@ -361,6 +355,15 @@ function EcosystemBar() {
                     <div className="text-muted-foreground text-xs">{link.note}</div>
                 </Link>
             ))}
+        </div>
+    )
+}
+
+/** Shared placeholder so a page waiting on its own data still shows the shell around it. */
+export function Loading({ what = 'Creditcoin' }: { what?: string }) {
+    return (
+        <div className="text-muted-foreground flex items-center gap-2 py-24 text-sm">
+            <Loader2 className="size-4 animate-spin" /> Reading {what}…
         </div>
     )
 }

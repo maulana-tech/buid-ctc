@@ -2,13 +2,13 @@
 
 import Link from 'next/link'
 
-import { AmountAction, Notice, Row, Stat, useApp } from '@/components/app-shell'
+import { AmountAction, Loading, Notice, Row, Stat, useApp } from '@/components/app-shell'
 import { Card } from '@/components/ui/card'
 import { formatAmount, formatPercent } from '@/lib/creditpass'
 
 export default function WithdrawPage() {
     const { snapshot } = useApp()
-    if (!snapshot) return null
+    if (!snapshot) return <Loading />
 
     const { decimals, symbol } = snapshot.asset
     const { vault } = snapshot

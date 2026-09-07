@@ -2,9 +2,7 @@
 
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
-import { Loader2 } from 'lucide-react'
-
-import { Notice, Stat } from '@/components/app-shell'
+import { Loading, Notice, Stat } from '@/components/app-shell'
 import { Card } from '@/components/ui/card'
 import { loadDirectory, shorten, tierOf, type DirectoryEntry } from '@/lib/creditpass'
 
@@ -23,13 +21,7 @@ export default function DirectoryPage() {
     }, [])
 
     if (error) return <Notice tone="warn">{error}</Notice>
-    if (!entries) {
-        return (
-            <div className="text-muted-foreground flex items-center gap-2 py-24 text-sm">
-                <Loader2 className="size-4 animate-spin" /> Reading the registry…
-            </div>
-        )
-    }
+    if (!entries) return <Loading what="the registry" />
 
     const scored = entries.filter((e) => e.score > 0)
     const averageScore = scored.length > 0 ? Math.round(scored.reduce((sum, e) => sum + e.score, 0) / scored.length) : 0

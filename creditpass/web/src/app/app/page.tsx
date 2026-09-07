@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useState } from 'react'
 import { ArrowUpRight, Check, ChevronDown } from 'lucide-react'
 
-import { Notice, Stat, useApp } from '@/components/app-shell'
+import { Loading, Notice, Stat, useApp } from '@/components/app-shell'
 import { Card } from '@/components/ui/card'
 import {
     ACTION_LABELS,
@@ -25,7 +25,7 @@ import {
 export default function PassportPage() {
     const { snapshot } = useApp()
     const [expanded, setExpanded] = useState<string | null>(null)
-    if (!snapshot) return null
+    if (!snapshot) return <Loading />
 
     const tier = tierOf(snapshot.score, snapshot.minScore)
     const { decimals, symbol } = snapshot.asset
