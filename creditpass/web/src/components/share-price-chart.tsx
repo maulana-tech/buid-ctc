@@ -12,30 +12,8 @@ import {
     type UTCTimestamp,
 } from 'lightweight-charts'
 
+import { chartPalette } from '@/lib/chart-theme'
 import { formatAmount, type PriceHistory } from '@/lib/creditpass'
-
-/**
- * Read a CSS custom property off the document and hand it back as hex.
- *
- * The app's tokens are OKLCH (shadcn), and lightweight-charts' colour parser only understands
- * hex / rgb / hsl — it throws on `oklch()` or the `lab()` the browser resolves it to. A 1x1 canvas
- * accepts any colour the browser can paint and gives back sRGB bytes, which is exactly the
- * conversion needed, with no dependency.
- */
-function token(name: string, fallback: string) {
-    if (typeof window === 'undefined') return fallback
-    const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
-    if (!raw) return fallback
-    if (/^#[0-9a-f]{6}$/i.test(raw)) return raw
-
-    const ctx = document.createElement('canvas').getContext('2d')
-    if (!ctx) return fallback
-    ctx.fillStyle = '#000'
-    ctx.fillStyle = raw
-    ctx.fillRect(0, 0, 1, 1)
-    const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data
-    return `#${[r, g, b].map((c) => c.toString(16).padStart(2, '0')).join('')}`
-}
 
 type Candle = { time: number; open: number; high: number; low: number; close: number; trades: number }
 
@@ -105,14 +83,7 @@ export function SharePriceChart({ history, symbol }: { history: PriceHistory; sy
         if (showTable || !container.current || candles.length === 0) return
 
         const el = container.current
-        const paint = () => ({
-            text: token('--muted-foreground', '#737373'),
-            grid: token('--border', '#e5e5e5'),
-            up: token('--chart-up', '#059669'),
-            down: token('--chart-down', '#d97706'),
-            series: token('--chart-series', '#2a78d6'),
-        })
-        let colors = paint()
+        let colors = chartPalette()
 
         const chart = createChart(el, {
             autoSize: true,
@@ -173,7 +144,7 @@ export function SharePriceChart({ history, symbol }: { history: PriceHistory; sy
         chart.timeScale().fitContent()
 
         const observer = new MutationObserver(() => {
-            colors = paint()
+            colors = chartPalette()
             chart.applyOptions({
                 layout: { textColor: colors.text },
                 grid: { horzLines: { color: colors.grid } },
