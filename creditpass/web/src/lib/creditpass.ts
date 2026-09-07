@@ -161,6 +161,39 @@ export function provider() {
     return new JsonRpcProvider(RPC_URL)
 }
 
+/** Creditcoin's RPC times out at 10s; 10k blocks answers comfortably, 50k does not. */
+const LOG_CHUNK = 9_000
+
+/** Block the contracts were deployed at. Written by the deploy script; scanning below it is waste. */
+const DEPLOY_BLOCK = Number(process.env.NEXT_PUBLIC_DEPLOY_BLOCK ?? 0)
+
+/** How far back to look when the deploy block is unknown — about a week of Creditcoin blocks. */
+const DEFAULT_LOOKBACK = 50_000
+
+/**
+ * Reads logs in bounded windows, newest first.
+ *
+ * `queryFilter` with no range asks for block 0 to latest, which the public RPC refuses outright.
+ * That failure only appears once the contracts are on a real network — locally, Anvil answers it
+ * instantly and the bug stays invisible.
+ */
+async function queryLogsChunked(contract: Contract, filter: unknown, rpc: JsonRpcProvider) {
+    const head = await rpc.getBlockNumber()
+    const floor = DEPLOY_BLOCK > 0 ? DEPLOY_BLOCK : Math.max(0, head - DEFAULT_LOOKBACK)
+
+    const collected = []
+    for (let end = head; end >= floor; end -= LOG_CHUNK) {
+        const start = Math.max(floor, end - LOG_CHUNK + 1)
+        try {
+            collected.push(...(await contract.queryFilter(filter as never, start, end)))
+        } catch {
+            // A window the RPC will not serve is not evidence the range is empty; skip it.
+        }
+        if (start === floor) break
+    }
+    return collected
+}
+
 /** Score bands mirror CreditLine.creditLimit — keep the two in step. */
 export function tierOf(score: number, minScore: number) {
     if (score < minScore) return { label: 'No credit line', multiplier: 0 }
@@ -309,8 +342,8 @@ export async function loadDirectory(limit = 50): Promise<DirectoryEntry[]> {
     const registry = new Contract(ADDRESSES.registry, REGISTRY_ABI, rpc)
 
     const [repayments, liquidations] = await Promise.all([
-        registry.queryFilter(registry.filters.RepaymentRecorded()),
-        registry.queryFilter(registry.filters.LiquidationRecorded()),
+        queryLogsChunked(registry, registry.filters.RepaymentRecorded(), rpc),
+        queryLogsChunked(registry, registry.filters.LiquidationRecorded(), rpc),
     ])
 
     const seen = new Map<string, number>()
@@ -393,7 +426,7 @@ export async function loadSnapshot(address: string): Promise<Snapshot> {
     if (ADDRESSES.asc) {
         try {
             const asc = new Contract(ADDRESSES.asc, ASC_ABI, rpc)
-            const logs = await asc.queryFilter(asc.filters.HistoryProved(address))
+            const logs = await queryLogsChunked(asc, asc.filters.HistoryProved(address), rpc)
             history = logs
                 .map((log) => {
                     const args = (log as unknown as { args: [string, bigint, bigint, bigint, string] }).args

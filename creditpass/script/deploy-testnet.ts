@@ -104,6 +104,10 @@ async function main() {
     await (await line.deposit(VAULT_SEED, account.address)).wait()
     console.log(`  ${VAULT_SEED / 1_000_000n} tUSD supplied — ordinary ERC4626 shares, no special rights`)
 
+    // The dashboard scans logs from here rather than block 0 — the public RPC times out at 10s and
+    // will not serve an unbounded range.
+    const deployBlock = await provider.getBlockNumber()
+
     const addresses = {
         CREDIT_REGISTRY_ADDRESS: await registry.getAddress(),
         LENDING_HISTORY_ASC_ADDRESS: await asc.getAddress(),
@@ -121,6 +125,7 @@ async function main() {
             `NEXT_PUBLIC_LENDING_HISTORY_ASC_ADDRESS=${addresses.LENDING_HISTORY_ASC_ADDRESS}`,
             `NEXT_PUBLIC_CREDIT_LINE_ADDRESS=${addresses.CREDIT_LINE_ADDRESS}`,
             `NEXT_PUBLIC_SHARE_MARKET_ADDRESS=${addresses.SHARE_MARKET_ADDRESS}`,
+            `NEXT_PUBLIC_DEPLOY_BLOCK=${deployBlock}`,
             '',
         ].join('\n')
     )
