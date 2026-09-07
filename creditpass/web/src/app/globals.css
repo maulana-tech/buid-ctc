@@ -13,6 +13,12 @@
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
   --font-heading: var(--font-sans);
+  /* Chart series colour — categorical slot 1 of the reference palette, validated against both
+     surfaces with scripts/validate_palette.js. Dark is its own step, not a flipped light. */
+  --chart-series: #2a78d6;
+}
+.dark {
+  --chart-series: #3987e5;
 }
 
 @theme inline {
