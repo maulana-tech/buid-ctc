@@ -16,7 +16,8 @@
     "verify": "npm run check:abi && forge build && forge test",
     "local": "tsx script/local.ts",
     "anvil": "anvil --chain-id 102031",
-    "deploy:testnet": "tsx script/deploy-testnet.ts"
+    "deploy:testnet": "tsx script/deploy-testnet.ts",
+    "prove": "tsx script/prove.ts"
   },
   "dependencies": {
     "@gluwa/asc-contracts": "0.2.1",
