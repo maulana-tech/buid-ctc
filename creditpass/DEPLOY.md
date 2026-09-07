@@ -20,7 +20,7 @@ precompile accept our proofs?**
 ```bash
 npm install
 forge build
-npm run verify          # ABI check + 49 tests. Do this before spending gas.
+npm run verify          # ABI check + 54 tests. Do this before spending gas.
 ```
 
 ---
@@ -166,6 +166,13 @@ A guarantee is only a claim until you watch it refuse something.
 | `waitUntilHeightAttested` hangs | that block is not attested yet | recent blocks take minutes; historical ones return immediately |
 | Gas estimation warning | pallet-evm does not always surface precompile reverts | harmless — the worker falls back to a size-based limit |
 | Dashboard still shows the demo banner | `web/.env.local` not picked up | restart `pnpm dev` |
+| `check:abi` reports DRIFT | a contract changed, the dashboard did not | update the ABI string it names in `web/src/lib/creditpass.ts` |
+| Fixture test fails after a contract change | the event or decoder path moved | the fixtures are real chain data and do not go stale on their own — re-read the failure |
+| `npm run local` says "no chain" | Anvil is not running | `npm run anvil` in another terminal |
+| `anvil_setCode did not take` | the RPC is not Anvil | point `LOCAL_RPC_URL` at an Anvil instance |
+| Local borrow button disabled | wallet is not the dev account | import the key `npm run local` prints |
+| Chart throws `Failed to parse color: lab(…)` | lightweight-charts only parses hex/rgb/hsl; the theme tokens are OKLCH | `web/src/lib/chart-theme.ts` rasterises tokens to hex — route new colours through `chartPalette()` |
+| Earn shows `0 in · 0 out` for a wallet that deposited | `NEXT_PUBLIC_DEPLOY_BLOCK` is above the vault's first events | set it to the block *before* `CreditRegistry` was created (Blockscout: address → creation tx → block); `deploy:testnet` records it before deploying |
 
 ---
 
