@@ -93,6 +93,9 @@ export const MARKET_ABI = [
     'function list(uint128 shares, uint128 askAssets) returns (uint256)',
     'function cancel(uint256)',
     'function fill(uint256)',
+    'function fillPartial(uint256 id, uint128 sharesToBuy)',
+    'event Filled(uint256 indexed id, address indexed seller, address indexed buyer, uint128 shares, uint128 paidAssets)',
+    'event PartiallyFilled(uint256 indexed id, address indexed buyer, uint128 shares, uint128 paidAssets, uint128 remainingShares)',
 ]
 
 export const ASC_ABI = [
@@ -275,13 +278,49 @@ export type Offer = {
     discountBps: number
 }
 
-/** The open book, cheapest relative to NAV first — the best deal for a buyer sits at the top. */
-export async function loadOffers(): Promise<Offer[]> {
-    if (!isConfigured || !ADDRESSES.market) return DEMO_OFFERS
+/** What the connected wallet can actually trade with — not the address being looked up. */
+export type MarketViewer = {
+    address: string
+    shares: bigint
+    shareValue: bigint
+    assetBalance: bigint
+}
+
+export type Market = {
+    offers: Offer[]
+    /** Assets one whole share redeems for. The number every price on the page is judged against. */
+    sharePrice: bigint
+    decimals: number
+    symbol: string
+    viewer: MarketViewer | null
+    demo: boolean
+}
+
+/**
+ * The open book plus the viewer's own position.
+ *
+ * `viewer` is deliberately the **connected wallet**, not the address in the lookup bar. Selling and
+ * buying spend the wallet's balance, so showing anyone else's position next to those buttons would
+ * be quietly wrong.
+ */
+export async function loadMarket(viewer?: string | null): Promise<Market> {
+    if (!isConfigured || !ADDRESSES.market) {
+        return { ...DEMO_MARKET, viewer: viewer ? DEMO_MARKET.viewer : null }
+    }
 
     const rpc = provider()
     const market = new Contract(ADDRESSES.market, MARKET_ABI, rpc)
-    const ids = (await market.openOffers()) as bigint[]
+    const line = new Contract(ADDRESSES.line, LINE_ABI, rpc)
+
+    const [ids, assetAddress] = await Promise.all([
+        market.openOffers() as Promise<bigint[]>,
+        line.asset() as Promise<string>,
+    ])
+
+    const token = new Contract(assetAddress, ERC20_ABI, rpc)
+    const [decimals, symbol] = await Promise.all([token.decimals() as Promise<bigint>, token.symbol() as Promise<string>])
+    const unit = 10n ** BigInt(decimals)
+    const sharePrice = (await line.convertToAssets(unit)) as bigint
 
     const offers = await Promise.all(
         ids.map(async (id) => {
@@ -299,10 +338,183 @@ export async function loadOffers(): Promise<Offer[]> {
         })
     )
 
-    return offers.sort((a, b) => b.discountBps - a.discountBps)
+    let position: MarketViewer | null = null
+    if (viewer) {
+        const [shares, assetBalance] = await Promise.all([
+            line.balanceOf(viewer) as Promise<bigint>,
+            token.balanceOf(viewer) as Promise<bigint>,
+        ])
+        position = {
+            address: viewer,
+            shares,
+            shareValue: (await line.convertToAssets(shares)) as bigint,
+            assetBalance,
+        }
+    }
+
+    return {
+        offers: offers.sort((a, b) => b.discountBps - a.discountBps),
+        sharePrice,
+        decimals: Number(decimals),
+        symbol,
+        viewer: position,
+        demo: false,
+    }
 }
 
-const DEMO_OFFERS: Offer[] = [
+/**
+ * Turn "I want to spend X" into a plan against the book: cheapest offers first, partial on the last.
+ * Every fill is at that offer's listed per-share price — nothing here is a curve.
+ */
+export type BuyPlan = {
+    legs: { offer: Offer; shares: bigint; cost: bigint }[]
+    totalShares: bigint
+    totalCost: bigint
+    /** Spend the book could not absorb, when the request exceeds every open offer combined. */
+    unfilled: bigint
+}
+
+export function planBuy(spend: bigint, offers: Offer[]): BuyPlan {
+    const legs: BuyPlan['legs'] = []
+    let remaining = spend
+    let totalShares = 0n
+    let totalCost = 0n
+
+    for (const offer of offers) {
+        if (remaining <= 0n) break
+        if (offer.shares === 0n || offer.askAssets === 0n) continue
+
+        if (remaining >= offer.askAssets) {
+            legs.push({ offer, shares: offer.shares, cost: offer.askAssets })
+            remaining -= offer.askAssets
+            totalShares += offer.shares
+            totalCost += offer.askAssets
+        } else {
+            // Partial: how many shares does `remaining` buy at this offer's price, rounding the
+            // share count down so the contract's round-up on cost cannot exceed what we quoted.
+            const shares = (remaining * offer.shares) / offer.askAssets
+            if (shares === 0n) break
+            const cost = (offer.askAssets * shares + offer.shares - 1n) / offer.shares
+            legs.push({ offer, shares, cost })
+            remaining -= cost
+            totalShares += shares
+            totalCost += cost
+        }
+    }
+
+    return { legs, totalShares, totalCost, unfilled: remaining > 0n ? remaining : 0n }
+}
+
+export type PricePoint = { block: number; time: number; price: bigint }
+export type Trade = { block: number; time: number; shares: bigint; paid: bigint; pricePerShare: bigint; txHash: string }
+
+export type PriceHistory = {
+    /** What one share redeemed for in the vault, sampled across the window. */
+    nav: PricePoint[]
+    /** What buyers actually paid on the market. */
+    trades: Trade[]
+    decimals: number
+    fromBlock: number
+    toBlock: number
+}
+
+/**
+ * Redemption value over time plus market trades.
+ *
+ * NAV is sampled with historical `eth_call`s rather than reconstructed from events: the number the
+ * vault reports at a block is the number, and a public RPC serves thirty of those far more happily
+ * than one unbounded log query. It only moves when a loan is repaid or defaults, so a step chart is
+ * the honest shape.
+ */
+export async function loadPriceHistory(points = 30): Promise<PriceHistory> {
+    if (!isConfigured || !ADDRESSES.market) return DEMO_HISTORY
+
+    const rpc = provider()
+    const line = new Contract(ADDRESSES.line, LINE_ABI, rpc)
+    const market = new Contract(ADDRESSES.market, MARKET_ABI, rpc)
+
+    const head = await rpc.getBlockNumber()
+    const from = DEPLOY_BLOCK > 0 ? DEPLOY_BLOCK : Math.max(0, head - DEFAULT_LOOKBACK)
+    const decimals = Number(await new Contract(await line.asset(), ERC20_ABI, rpc).decimals())
+    const unit = 10n ** BigInt(decimals)
+
+    const step = Math.max(1, Math.floor((head - from) / (points - 1)))
+    const blocks = Array.from({ length: points }, (_, i) => Math.min(head, from + i * step))
+    if (blocks[blocks.length - 1] !== head) blocks.push(head)
+
+    // Block timestamps come from the chain, so the time axis is real time — not block numbers
+    // dressed up as dates.
+    const timeOf = async (block: number) => Number((await rpc.getBlock(block))?.timestamp ?? 0)
+
+    const nav = await Promise.all(
+        blocks.map(async (block) => {
+            try {
+                const [price, time] = await Promise.all([
+                    line.convertToAssets(unit, { blockTag: block }) as Promise<bigint>,
+                    timeOf(block),
+                ])
+                return { block, time, price }
+            } catch {
+                // Before the vault existed there is no price. Skip rather than invent one.
+                return null
+            }
+        })
+    )
+
+    const [fills, partials] = await Promise.all([
+        queryLogsChunked(market, market.filters.Filled(), rpc),
+        queryLogsChunked(market, market.filters.PartiallyFilled(), rpc),
+    ])
+    const trades: Trade[] = (
+        await Promise.all(
+            [...fills, ...partials].map(async (log) => {
+                const args = (log as unknown as { args: unknown[] }).args
+                const isPartial = (log as unknown as { fragment: { name: string } }).fragment.name === 'PartiallyFilled'
+                const shares = (isPartial ? args[2] : args[3]) as bigint
+                const paid = (isPartial ? args[3] : args[4]) as bigint
+                return {
+                    block: log.blockNumber,
+                    time: await timeOf(log.blockNumber),
+                    shares,
+                    paid,
+                    pricePerShare: shares === 0n ? 0n : (paid * unit) / shares,
+                    txHash: log.transactionHash,
+                }
+            })
+        )
+    ).sort((a, b) => a.block - b.block)
+
+    return {
+        nav: nav.filter((p): p is PricePoint => p !== null),
+        trades,
+        decimals,
+        fromBlock: from,
+        toBlock: head,
+    }
+}
+
+const DEMO_HISTORY: PriceHistory = {
+    decimals: 6,
+    fromBlock: 5_400_000,
+    toBlock: 5_444_000,
+    nav: Array.from({ length: 30 }, (_, i) => ({
+        block: 5_400_000 + i * 1_500,
+        time: 1_756_000_000 + i * 22_500, // ~15s blocks, ~6h apart
+        price: 1_000_000n + BigInt([0, 0, 0, 4, 4, 4, 4, 9, 9, 9, 9, 9, 14, 14, 14, 14, 14, 14, 14, 19, 19, 19, 19, 19, 19, 19, 26, 26, 26, 26][i]) * 1_000n,
+    })),
+    trades: [
+        { block: 5_412_000, time: 1_756_180_000, shares: 25_000_000_000n, paid: 24_350_000_000n, pricePerShare: 974_000n, txHash: '' },
+        { block: 5_431_500, time: 1_756_472_500, shares: 5_000_000_000n, paid: 5_045_000_000n, pricePerShare: 1_009_000n, txHash: '' },
+    ],
+}
+
+const DEMO_MARKET: Market = {
+    sharePrice: 1_026_000n,
+    decimals: 6,
+    symbol: 'tUSD',
+    demo: true,
+    viewer: { address: '0x0000000000000000000000000000000000000000', shares: 25_000_000_000n, shareValue: 25_650_000_000n, assetBalance: 4_200_000_000n },
+    offers: [
     {
         id: 0,
         seller: '0x7a3f4d1c2b9e8a5f6c0d3e2b1a9f8c7d6e5b4a30',
@@ -319,7 +531,8 @@ const DEMO_OFFERS: Offer[] = [
         nav: 5_128_000_000n,
         discountBps: 55,
     },
-]
+    ],
+}
 
 export type DirectoryEntry = {
     address: string
