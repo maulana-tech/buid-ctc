@@ -438,8 +438,29 @@ being scored is genuine mainnet borrowing history from genuine wallets.
   deep history takes ~15s to assemble. The failure surfaces as "not yet attested", which points at
   exactly the wrong cause. The worker now passes 60s explicitly.
 
-- **Still not deployed.** No contract of this project has ever been on Creditcoin. The proof
-  pipeline above was exercised read-only, without a wallet.
+- **Deployed, and the precompile accepts our proofs.** This was the last unknown a mock could not
+  answer. On Creditcoin testnet (chain 102031):
+
+  | Contract | Address |
+  | --- | --- |
+  | CreditRegistry | [`0x6d4d017d…D9Ea`](https://creditcoin-testnet.blockscout.com/address/0x6d4d017dE8d0A36dce7856Ee989624C6A18cD9Ea) |
+  | LendingHistoryASC | [`0xD04A92C8…33E6`](https://creditcoin-testnet.blockscout.com/address/0xD04A92C83AFe71f4f69F9FAD0A33229BFBdE33E6) |
+  | CreditLine | [`0x970C3114…2185`](https://creditcoin-testnet.blockscout.com/address/0x970C3114C5Dcf853692bc8D3e0598d1AC9D12185) |
+  | ShareMarket | [`0xEAfd45D5…f3A9`](https://creditcoin-testnet.blockscout.com/address/0xEAfd45D5E7ECCF6014D91D9e3da39134C347f3A9) |
+  | TestUSD | [`0x44b99f76…876D`](https://creditcoin-testnet.blockscout.com/address/0x44b99f76f12e0Ece22f6bD76DcB305Afcf25876D) |
+
+  Three real Ethereum mainnet repayments proved through the live block-prover precompile — one per
+  protocol, each writing a credit profile:
+
+  | Protocol | Source block | Borrower | Gas |
+  | --- | --- | --- | --- |
+  | Aave V3 | 25,903,010 | `0x3078a7B4…46f7` | 313,614 |
+  | Spark | 25,903,010 | `0x3B7E7B3A…5752` | 313,614 |
+  | Morpho Blue | 25,903,012 | `0x8297492D…1070` | 340,942 |
+
+  And the guards were watched refusing things, not just asserted: resubmitting a proof reverts on the
+  query-id dedupe, and an Aave transaction submitted under Morpho's protocol id reverts on the
+  emitter check. Both left no logs and no state.
 - **The frontend is not wired to a chain yet.** With the contract addresses unset it renders a
   clearly-labelled demo, and the ABIs in `web/src/lib/creditpass.ts` are hand-written from the
   contracts — a mismatch would only surface on first deploy.
