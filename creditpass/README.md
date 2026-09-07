@@ -175,7 +175,7 @@ web/                          Next.js landing page + dashboard
 | `/` | Landing page |
 | `/app` | Passport — score, profile, attested history across protocols |
 | `/app/borrow` | Credit line, borrow and repay |
-| `/app/earn` | Supply APR, utilisation, deposit |
+| `/app/earn` | Supply APR and where it comes from, a line chart of share price / vault size / utilisation over the window, and the connected wallet's position — value, yield against its entry share price, supply and withdraw in one card, and a projection that is arithmetic on today's rate, not a promise |
 | `/app/directory` | Every passport in the registry — discovery, not just lookup |
 | `/app/withdraw` | Redeem shares, with the liquidity cap shown up front |
 | `/app/swap` | Secondary market for vault shares, laid out as a swap: TradingView chart of redemption value and trades on the left, "you pay / you receive" on the right |
@@ -469,6 +469,10 @@ being scored is genuine mainnet borrowing history from genuine wallets.
   Calling a locked balance "collateral" would be a lie. Enforcement here is reputational, which is
   how real-world credit works: nobody repossesses your house over a late card payment, your score
   takes the hit.
+- **Yield on Earn is per share held, against the wallet's entry price** — the weighted average of
+  its own Deposit events. Cash-flow accounting would show a loss the moment shares moved into market
+  escrow; this does not. The flip side: shares bought on the market have an entry price the vault
+  never saw, so the card says so instead of guessing.
 - **Partial fills have no minimum size.** A buyer can take one raw unit of an offer, which costs
   the seller a rounding of at most one unit in their favour and could be used to spam
   `PartiallyFilled` events. Add a minimum fill if the book ever gets busy enough for that to matter.

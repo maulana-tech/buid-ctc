@@ -70,6 +70,11 @@ async function main() {
     // Nonce is tracked locally: back-to-back deploys otherwise race the RPC's view of the account.
     const wallet = new NonceManager(account)
 
+    // The dashboard scans logs from here rather than block 0 — the public RPC times out at 10s and
+    // will not serve an unbounded range. Taken *before* the first deployment so the vault's own
+    // seeding deposit, and everything after it, sits above the floor.
+    const deployBlock = await provider.getBlockNumber()
+
     console.log('Deploying')
     const registry = await deploy('CreditRegistry', 'CreditRegistry.sol/CreditRegistry.json', wallet)
     const asc = await deploy('LendingHistoryASC', 'LendingHistoryASC.sol/LendingHistoryASC.json', wallet, [
@@ -112,10 +117,6 @@ async function main() {
     const ask = (nav * 97n) / 100n // 3% off redemption value — the price of leaving early
     await (await market.list(offerShares, ask)).wait()
     console.log(`  25,000 shares asking ${ask / 1_000_000n} tUSD against ${nav / 1_000_000n} redemption value`)
-
-    // The dashboard scans logs from here rather than block 0 — the public RPC times out at 10s and
-    // will not serve an unbounded range.
-    const deployBlock = await provider.getBlockNumber()
 
     const addresses = {
         CREDIT_REGISTRY_ADDRESS: await registry.getAddress(),
