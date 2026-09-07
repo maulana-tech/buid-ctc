@@ -3,14 +3,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { formatUnits } from 'ethers'
 import {
-    AreaSeries,
+    CandlestickSeries,
     ColorType,
     CrosshairMode,
     LineStyle,
-    LineType,
     createChart,
     createSeriesMarkers,
-    type IChartApi,
     type UTCTimestamp,
 } from 'lightweight-charts'
 
@@ -39,33 +37,80 @@ function token(name: string, fallback: string) {
     return `#${[r, g, b].map((c) => c.toString(16).padStart(2, '0')).join('')}`
 }
 
+type Candle = { time: number; open: number; high: number; low: number; close: number; trades: number }
+
 /**
- * Redemption value per share over the window, with market trades as markers.
+ * Build OHLC candles from everything the share was worth in each bucket: the vault's redemption
+ * value at sampled blocks, plus what buyers actually paid. Buckets with nothing in them carry the
+ * previous close as a flat candle rather than being invented — a gap in the data is a gap.
+ */
+function toCandles(history: PriceHistory, buckets: number): Candle[] {
+    const { nav, trades, decimals } = history
+    const points = [
+        ...nav.map((p) => ({ time: p.time, value: Number(formatUnits(p.price, decimals)), trade: false })),
+        ...trades.map((t) => ({ time: t.time, value: Number(formatUnits(t.pricePerShare, decimals)), trade: true })),
+    ].sort((a, b) => a.time - b.time)
+    if (points.length === 0) return []
+
+    const start = points[0].time
+    const end = points[points.length - 1].time
+    const width = Math.max(1, Math.ceil((end - start + 1) / buckets))
+
+    const candles: Candle[] = []
+    let cursor = 0
+    let prevClose = points[0].value
+    for (let i = 0; i < buckets; i++) {
+        const from = start + i * width
+        const to = from + width
+        const inBucket: typeof points = []
+        while (cursor < points.length && points[cursor].time < to) inBucket.push(points[cursor++])
+
+        if (inBucket.length === 0) {
+            if (from > end) break
+            candles.push({ time: from, open: prevClose, high: prevClose, low: prevClose, close: prevClose, trades: 0 })
+            continue
+        }
+        const values = inBucket.map((p) => p.value)
+        const candle = {
+            time: from,
+            open: prevClose,
+            high: Math.max(prevClose, ...values),
+            low: Math.min(prevClose, ...values),
+            close: values[values.length - 1],
+            trades: inBucket.filter((p) => p.trade).length,
+        }
+        candles.push(candle)
+        prevClose = candle.close
+    }
+    return candles
+}
+
+/**
+ * Redemption value per share as candlesticks, with market trades marked.
  *
  * TradingView's lightweight-charts, themed from the app's own tokens and re-themed when the dark
- * class flips. One series, so no legend — the header says what is plotted. NAV only moves when a
- * loan is repaid or defaults, so the line is drawn with steps: a smooth curve would invent movement
- * that never happened. Trade markers sit at what buyers actually paid; the gap below the line is
- * the price of leaving early.
+ * class flips. A candle here is honest OHLC over each bucket of everything the share was worth —
+ * the vault's redemption value and any price a buyer actually paid. Up/down is emerald against
+ * amber rather than green against red, because the pair has to survive colour-blindness.
  */
 export function SharePriceChart({ history, symbol }: { history: PriceHistory; symbol: string }) {
     const container = useRef<HTMLDivElement>(null)
-    const chartRef = useRef<IChartApi | null>(null)
     const [showTable, setShowTable] = useState(false)
 
     const { nav, trades, decimals } = history
     const last = nav[nav.length - 1]
-    const toNum = (v: bigint) => Number(formatUnits(v, decimals))
+    const candles = toCandles(history, 24)
 
     useEffect(() => {
-        if (showTable || !container.current || nav.length === 0) return
+        if (showTable || !container.current || candles.length === 0) return
 
         const el = container.current
         const paint = () => ({
             text: token('--muted-foreground', '#737373'),
             grid: token('--border', '#e5e5e5'),
+            up: token('--chart-up', '#059669'),
+            down: token('--chart-down', '#d97706'),
             series: token('--chart-series', '#2a78d6'),
-            surface: token('--card', '#ffffff'),
         })
         let colors = paint()
 
@@ -92,47 +137,41 @@ export function SharePriceChart({ history, symbol }: { history: PriceHistory; sy
             },
             handleScroll: false,
             handleScale: false,
-            localization: {
-                priceFormatter: (p: number) => p.toFixed(4),
-            },
+            localization: { priceFormatter: (p: number) => p.toFixed(4) },
         })
-        chartRef.current = chart
 
-        const series = chart.addSeries(AreaSeries, {
-            lineColor: colors.series,
-            lineWidth: 2,
-            lineType: LineType.WithSteps,
-            topColor: `${colors.series}1f`, // ~12% wash, never a saturated block
-            bottomColor: `${colors.series}00`,
+        const series = chart.addSeries(CandlestickSeries, {
+            upColor: colors.up,
+            downColor: colors.down,
+            wickUpColor: colors.up,
+            wickDownColor: colors.down,
+            borderVisible: false,
             priceLineVisible: true,
             priceLineColor: colors.series,
             priceLineStyle: LineStyle.Solid,
             lastValueVisible: true,
-            crosshairMarkerRadius: 4,
-            crosshairMarkerBorderColor: colors.surface,
-            crosshairMarkerBorderWidth: 2,
             priceFormat: { type: 'price', precision: 4, minMove: 0.0001 },
         })
+        series.setData(candles.map((c) => ({ time: c.time as UTCTimestamp, open: c.open, high: c.high, low: c.low, close: c.close })))
 
-        // Timestamps must be unique and ascending for the time scale; samples are, trades may
-        // share a second with a sample, which markers tolerate.
-        series.setData(nav.map((p) => ({ time: p.time as UTCTimestamp, value: toNum(p.price) })))
-
+        // Trades: a dot under the candle they landed in, so real prints stand out from sampled value.
         createSeriesMarkers(
             series,
-            trades.map((t) => ({
-                time: t.time as UTCTimestamp,
-                position: 'inBar' as const,
-                shape: 'circle' as const,
-                color: colors.series,
-                size: 1,
-                text: `${formatAmount(t.shares, decimals)} sh @ ${toNum(t.pricePerShare).toFixed(4)}`,
-            }))
+            candles
+                .filter((c) => c.trades > 0)
+                .map((c) => ({
+                    time: c.time as UTCTimestamp,
+                    position: 'belowBar' as const,
+                    shape: 'circle' as const,
+                    color: colors.series,
+                    size: 1,
+                    // Just the count: the newest candle sits on the right edge, where longer text clips.
+                    text: c.trades > 1 ? `×${c.trades}` : '',
+                }))
         )
 
         chart.timeScale().fitContent()
 
-        // Re-theme when the dark class flips: the tokens change, the chart must follow.
         const observer = new MutationObserver(() => {
             colors = paint()
             chart.applyOptions({
@@ -144,11 +183,11 @@ export function SharePriceChart({ history, symbol }: { history: PriceHistory; sy
                 },
             })
             series.applyOptions({
-                lineColor: colors.series,
-                topColor: `${colors.series}1f`,
-                bottomColor: `${colors.series}00`,
+                upColor: colors.up,
+                downColor: colors.down,
+                wickUpColor: colors.up,
+                wickDownColor: colors.down,
                 priceLineColor: colors.series,
-                crosshairMarkerBorderColor: colors.surface,
             })
         })
         observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
@@ -156,21 +195,30 @@ export function SharePriceChart({ history, symbol }: { history: PriceHistory; sy
         return () => {
             observer.disconnect()
             chart.remove()
-            chartRef.current = null
         }
-    }, [nav, trades, decimals, showTable])
+        // candles is derived from history; history is the real dependency.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [history, showTable])
 
     if (nav.length === 0) {
         return <p className="text-muted-foreground py-12 text-center text-sm">No price history in this window yet.</p>
     }
 
+    const first = candles[0]
+    const change = first && first.open > 0 ? ((candles[candles.length - 1].close - first.open) / first.open) * 100 : 0
+
     return (
         <div className="space-y-3">
             <div className="flex items-baseline justify-between gap-4">
                 <div>
-                    <div className="text-muted-foreground text-xs">Redemption value per share</div>
-                    <div className="mt-1 text-2xl font-semibold tracking-tight">
-                        {formatAmount(last.price, decimals, 4)} <span className="text-muted-foreground text-sm font-normal">{symbol}</span>
+                    <div className="text-muted-foreground text-xs">cpUSD / {symbol} · redemption value per share</div>
+                    <div className="mt-1 flex items-baseline gap-2">
+                        <span className="text-2xl font-semibold tracking-tight">{formatAmount(last.price, decimals, 4)}</span>
+                        <span className="text-muted-foreground text-sm">{symbol}</span>
+                        <span className={`text-sm tabular-nums ${change > 0 ? 'text-emerald-600' : change < 0 ? 'text-amber-600' : 'text-muted-foreground'}`}>
+                            {change >= 0 ? '+' : ''}
+                            {change.toFixed(2)}%
+                        </span>
                     </div>
                 </div>
                 <button
@@ -187,27 +235,28 @@ export function SharePriceChart({ history, symbol }: { history: PriceHistory; sy
                         <thead className="text-muted-foreground bg-muted/40 sticky top-0 text-left">
                             <tr className="*:px-3 *:py-2 *:font-normal">
                                 <th>Time</th>
-                                <th>Block</th>
-                                <th className="text-right">Redeems for</th>
-                                <th className="text-right">Traded at</th>
+                                <th className="text-right">Open</th>
+                                <th className="text-right">High</th>
+                                <th className="text-right">Low</th>
+                                <th className="text-right">Close</th>
+                                <th className="text-right">Trades</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y">
-                            {nav.map((p, i) => {
-                                const t = trades.filter((tr) => tr.block <= p.block && (i === nav.length - 1 || tr.block < nav[i + 1].block))
-                                return (
-                                    <tr
-                                        key={p.block}
-                                        className="*:px-3 *:py-1.5 tabular-nums">
-                                        <td>{new Date(p.time * 1000).toLocaleString()}</td>
-                                        <td className="font-mono">#{p.block.toLocaleString()}</td>
-                                        <td className="text-right">{formatAmount(p.price, decimals, 4)}</td>
-                                        <td className="text-muted-foreground text-right">
-                                            {t.length ? t.map((tr) => formatAmount(tr.pricePerShare, decimals, 4)).join(', ') : '—'}
-                                        </td>
-                                    </tr>
-                                )
-                            })}
+                            {candles.map((c) => (
+                                <tr
+                                    key={c.time}
+                                    className="*:px-3 *:py-1.5 tabular-nums">
+                                    <td>{new Date(c.time * 1000).toLocaleString()}</td>
+                                    <td className="text-right">{c.open.toFixed(4)}</td>
+                                    <td className="text-right">{c.high.toFixed(4)}</td>
+                                    <td className="text-right">{c.low.toFixed(4)}</td>
+                                    <td className={`text-right ${c.close > c.open ? 'text-emerald-600' : c.close < c.open ? 'text-amber-600' : ''}`}>
+                                        {c.close.toFixed(4)}
+                                    </td>
+                                    <td className="text-muted-foreground text-right">{c.trades || '—'}</td>
+                                </tr>
+                            ))}
                         </tbody>
                     </table>
                 </div>
@@ -217,6 +266,10 @@ export function SharePriceChart({ history, symbol }: { history: PriceHistory; sy
                     className="h-70 w-full"
                 />
             )}
+            <p className="text-muted-foreground text-xs">
+                Each candle covers everything the share was worth in its window — vault redemption value and any price a buyer actually paid. Trades are
+                marked beneath their candle.
+            </p>
         </div>
     )
 }

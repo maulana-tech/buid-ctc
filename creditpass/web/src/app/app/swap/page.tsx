@@ -59,7 +59,7 @@ export default function SwapPage() {
         loadMarket(wallet)
             .then(setMarket)
             .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-        loadPriceHistory()
+        loadPriceHistory(60)
             .then(setHistory)
             .catch(() => setHistory(null))
     }, [wallet])

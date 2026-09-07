@@ -16,9 +16,17 @@
   /* Chart series colour — categorical slot 1 of the reference palette, validated against both
      surfaces with scripts/validate_palette.js. Dark is its own step, not a flipped light. */
   --chart-series: #2a78d6;
+  /* Candle up/down. Emerald against amber, not green against red: the classic pair collapses
+     under deuteranopia, and a candle's whole message is which of the two it is. */
+  --chart-up: #059669;
+  --chart-down: #c2410c;
 }
 .dark {
   --chart-series: #3987e5;
+  /* Same pair on the dark surface: both sit inside the dark lightness band and keep ΔE 9.4
+     under deuteranopia, which the lighter emerald-500 / amber-500 steps do not. */
+  --chart-up: #059669;
+  --chart-down: #c2410c;
 }
 
 @theme inline {
