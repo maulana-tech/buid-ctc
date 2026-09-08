@@ -163,6 +163,7 @@ no state.
 | --- | --- |
 | `/` | Landing page. Its figures strip — passports scored, entries proved, vault size, supply APR, utilisation, open offers — is read from the deployed contracts through the same loaders the dashboard uses |
 | `/app` | **Passport.** Score, tier, profile, and the attested history — each row expands to its provenance: source chain, block (linked to Etherscan), emitting pool, query id, Creditcoin proof tx |
+| `/app/portfolio` | **Portfolio** for the connected wallet: net position, allocation across wallet / vault / market escrow, what needs attention (loan due or overdue, score below the line, capital locked in loans, offers above NAV) with a button to the right page, four summary cards, and one activity timeline merged from every contract the wallet touched |
 | `/app/directory` | Every passport in the registry, read from its own events. Discovery, not just lookup |
 | `/app/borrow` | Credit line by tier, borrow and repay, what a default costs |
 | `/app/earn` | Supply APR and where it comes from; line chart of share price / vault size / utilisation; the connected wallet's position with yield against its entry price; supply and withdraw in one card |
@@ -302,7 +303,7 @@ contracts/         CreditRegistry, LendingHistoryASC, CreditLine, ShareMarket, T
 test/              54 Foundry tests · fixtures/ real mainnet proofs · mocks/ the 0xFD2 stand-in
 worker/            protocols.ts (one source of truth), index.ts, check-sigs.ts, check-attestation.ts
 script/            deploy-testnet.ts, local.ts, prove.ts, register-protocols.ts, make-fixtures.ts, check-abi.ts, Deploy.s.sol
-web/               Next.js — landing (/) and dashboard (/app/*), lightweight-charts, EIP-6963 wallets
+web/               Next.js — landing (/) and dashboard (/app/*: passport, portfolio, directory, borrow, earn, withdraw, swap), lightweight-charts, EIP-6963 wallets
 DEPLOY.md          the testnet walkthrough
 ```
 
