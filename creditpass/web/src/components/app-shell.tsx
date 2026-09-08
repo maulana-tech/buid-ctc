@@ -4,13 +4,13 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import { BrowserProvider, Contract, isAddress, parseUnits } from 'ethers'
-import { ArrowLeft, ArrowUpRight, Droplet, Loader2, Search, TriangleAlert, Wallet } from 'lucide-react'
+import { ArrowLeft, Droplet, Loader2, Search, TriangleAlert, Wallet } from 'lucide-react'
 
 import { Logo } from '@/components/logo'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ADDRESSES, ECOSYSTEM, ERC20_ABI, LINE_ABI, explorerUrl, isConfigured, loadSnapshot, shorten, type Snapshot } from '@/lib/creditpass'
+import { ADDRESSES, ERC20_ABI, LINE_ABI, isConfigured, loadSnapshot, shorten, type Snapshot } from '@/lib/creditpass'
 import {
     CREDITCOIN_TESTNET,
     currentChainId,
@@ -282,89 +282,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     {error && <Notice tone="warn">{error}</Notice>}
 
                     {children}
-
-                    <ContractsBar assetAddress={snapshot?.asset.address} />
-                    <EcosystemBar />
                 </main>
             </div>
         </AppContext.Provider>
-    )
-}
-
-/**
- * Every deployed address, linked into the explorer. For a project whose entire claim is "you can
- * check this yourself", the addresses have to be one click away on every page.
- */
-function ContractsBar({ assetAddress }: { assetAddress?: string }) {
-    if (!isConfigured) return null
-
-    const contracts = [
-        { label: 'CreditRegistry', address: ADDRESSES.registry },
-        { label: 'LendingHistoryASC', address: ADDRESSES.asc },
-        { label: 'CreditLine vault', address: ADDRESSES.line },
-        { label: 'ShareMarket', address: ADDRESSES.market },
-        { label: 'Asset', address: assetAddress ?? '' },
-    ].filter((c) => c.address)
-
-    return (
-        <div className="border-t pt-6">
-            <div className="text-muted-foreground mb-3 text-xs">Deployed on Creditcoin testnet</div>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-                {contracts.map((contract) => {
-                    const href = explorerUrl('address', contract.address)
-                    // A local Anvil chain has no explorer; show the address rather than a dead link.
-                    const body = (
-                        <>
-                            <div className="group-hover:text-foreground flex items-center gap-1 text-sm font-medium">
-                                {contract.label}
-                                {href && <ArrowUpRight className="size-3.5 opacity-50" />}
-                            </div>
-                            <div className="text-muted-foreground font-mono text-xs">{shorten(contract.address)}</div>
-                        </>
-                    )
-                    return href ? (
-                        <Link
-                            key={contract.label}
-                            href={href}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="group">
-                            {body}
-                        </Link>
-                    ) : (
-                        <div key={contract.label}>{body}</div>
-                    )
-                })}
-            </div>
-        </div>
-    )
-}
-
-/** Where to get CTC for gas, a wallet to hold it, and the explorer to check the contracts. */
-function EcosystemBar() {
-    const links = [
-        { href: ECOSYSTEM.explorer, label: 'Block explorer', note: 'verify every number here' },
-        { href: ECOSYSTEM.penguinSwap, label: 'PenguinSwap', note: 'get CTC for gas' },
-        { href: ECOSYSTEM.creditWallet, label: 'Credit Wallet', note: 'official mobile wallet' },
-        { href: ECOSYSTEM.attestcoinDocs, label: 'Attestcoin docs', note: 'how the proofs work' },
-    ]
-    return (
-        <div className="grid gap-3 border-t pt-6 sm:grid-cols-2 lg:grid-cols-4">
-            {links.map((link) => (
-                <Link
-                    key={link.label}
-                    href={link.href}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="group">
-                    <div className="group-hover:text-foreground flex items-center gap-1 text-sm font-medium">
-                        {link.label}
-                        <ArrowUpRight className="size-3.5 opacity-50" />
-                    </div>
-                    <div className="text-muted-foreground text-xs">{link.note}</div>
-                </Link>
-            ))}
-        </div>
     )
 }
 

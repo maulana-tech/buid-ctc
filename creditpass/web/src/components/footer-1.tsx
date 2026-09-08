@@ -1,5 +1,7 @@
 import Link from 'next/link'
+import { ArrowUpRight } from 'lucide-react'
 import { LogoIcon } from '@/components/logo'
+import { ADDRESSES, explorerUrl, isConfigured, shorten } from '@/lib/creditpass'
 
 const footerLinks = [
     {
@@ -72,6 +74,39 @@ export default function Footer() {
                         </div>
                     ))}
                 </div>
+
+                {isConfigured && (
+                    <div className="border-t pt-8">
+                        <div className="text-muted-foreground mb-4 text-xs">Deployed on Creditcoin testnet</div>
+                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                            {[
+                                { label: 'CreditRegistry', address: ADDRESSES.registry },
+                                { label: 'LendingHistoryASC', address: ADDRESSES.asc },
+                                { label: 'CreditLine vault', address: ADDRESSES.line },
+                                { label: 'ShareMarket', address: ADDRESSES.market },
+                            ].filter((c) => c.address).map((contract) => {
+                                const href = explorerUrl('address', contract.address)
+                                const body = (
+                                    <>
+                                        <div className="group-hover:text-foreground flex items-center gap-1 text-sm font-medium">
+                                            {contract.label}
+                                            {href && <ArrowUpRight className="size-3.5 opacity-50" />}
+                                        </div>
+                                        <div className="text-muted-foreground font-mono text-xs">{shorten(contract.address)}</div>
+                                    </>
+                                )
+                                return href ? (
+                                    <Link key={contract.label} href={href} target="_blank" rel="noreferrer" className="group">
+                                        {body}
+                                    </Link>
+                                ) : (
+                                    <div key={contract.label}>{body}</div>
+                                )
+                            })}
+                        </div>
+                    </div>
+                )}
+
                 <div className="text-muted-foreground flex flex-wrap items-center justify-between gap-2 border-t pt-8 text-sm">
                     <span>&copy; CreditPass {new Date().getFullYear()}</span>
                     <span>Testnet only. Nothing here is financial advice.</span>
