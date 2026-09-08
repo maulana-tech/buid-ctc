@@ -26,6 +26,7 @@ const SAMPLE_ADDRESS = '0x7a3f4d1c2b9e8a5f6c0d3e2b1a9f8c7d6e5b4a30'
 
 const TABS = [
     { href: '/app', label: 'Passport' },
+    { href: '/app/portfolio', label: 'Portfolio' },
     { href: '/app/directory', label: 'Directory' },
     { href: '/app/borrow', label: 'Borrow' },
     { href: '/app/earn', label: 'Earn' },
