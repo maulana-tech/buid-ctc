@@ -11,7 +11,7 @@
 import { readFileSync } from 'node:fs'
 import { Fragment, Interface } from 'ethers'
 
-import { ASC_ABI, LINE_ABI, REGISTRY_ABI } from '../web/src/lib/creditpass'
+import { ASC_ABI, LINE_ABI, MARKET_ABI, REGISTRY_ABI } from '../web/src/lib/creditpass'
 
 type Target = { label: string; declared: readonly string[]; artifact: string }
 
@@ -19,6 +19,7 @@ const TARGETS: Target[] = [
     { label: 'CreditRegistry', declared: REGISTRY_ABI, artifact: 'CreditRegistry.sol/CreditRegistry.json' },
     { label: 'CreditLine', declared: LINE_ABI, artifact: 'CreditLine.sol/CreditLine.json' },
     { label: 'LendingHistoryASC', declared: ASC_ABI, artifact: 'LendingHistoryASC.sol/LendingHistoryASC.json' },
+    { label: 'ShareMarket', declared: MARKET_ABI, artifact: 'ShareMarket.sol/ShareMarket.json' },
 ]
 
 function artifactSignatures(path: string): Set<string> {

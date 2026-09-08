@@ -90,6 +90,7 @@ export const LINE_ABI = [
     'event Withdraw(address indexed sender, address indexed receiver, address indexed owner, uint256 assets, uint256 shares)',
     'event Repaid(address indexed borrower, uint256 amount, bool closed)',
     'event Defaulted(address indexed borrower, uint256 shortfall)',
+    'event Borrowed(address indexed borrower, uint256 amount, uint16 score, uint64 dueBlock)',
 ]
 
 export const MARKET_ABI = [
@@ -102,6 +103,8 @@ export const MARKET_ABI = [
     'function fillPartial(uint256 id, uint128 sharesToBuy)',
     'event Filled(uint256 indexed id, address indexed seller, address indexed buyer, uint128 shares, uint128 paidAssets)',
     'event PartiallyFilled(uint256 indexed id, address indexed buyer, uint128 shares, uint128 paidAssets, uint128 remainingShares)',
+    'event Listed(uint256 indexed id, address indexed seller, uint128 shares, uint128 askAssets)',
+    'event Cancelled(uint256 indexed id, address indexed seller)',
 ]
 
 export const ASC_ABI = [
@@ -668,6 +671,119 @@ const DEMO_VAULT_HISTORY: VaultHistory = {
     events: [
         { time: 1_756_216_000, kind: 'repaid', amount: 120_000_000n, txHash: '' },
         { time: 1_756_540_000, kind: 'repaid', amount: 310_000_000n, txHash: '' },
+    ],
+}
+
+export type ActivityKind =
+    | 'proved'
+    | 'deposit'
+    | 'withdraw'
+    | 'borrow'
+    | 'repay'
+    | 'default'
+    | 'listed'
+    | 'cancelled'
+    | 'sold'
+    | 'bought'
+
+export type Activity = {
+    kind: ActivityKind
+    time: number
+    block: number
+    txHash: string
+    /** Primary amount in asset units, or shares for market/vault share events. */
+    amount: bigint
+    /** What the amount is denominated in. */
+    unit: 'asset' | 'shares'
+    detail: string
+}
+
+export type Portfolio = {
+    headBlock: number
+    activity: Activity[]
+}
+
+/**
+ * Everything the wallet has done across the registry, the vault and the market, as one timeline.
+ *
+ * Merged from each contract's own events rather than a stored per-user log: the contracts do not
+ * keep one, and an off-chain ledger would be one more thing to trust. Newest first.
+ */
+export async function loadPortfolio(wallet: string): Promise<Portfolio> {
+    if (!isConfigured) return DEMO_PORTFOLIO
+
+    const rpc = provider()
+    const line = new Contract(ADDRESSES.line, LINE_ABI, rpc)
+    const market = new Contract(ADDRESSES.market, MARKET_ABI, rpc)
+    const asc = new Contract(ADDRESSES.asc, ASC_ABI, rpc)
+
+    const [headBlock, deposits, withdrawals, borrows, repays, defaults, listed, cancelled, sold, boughtWhole, boughtPart, proved] =
+        await Promise.all([
+            rpc.getBlockNumber(),
+            queryLogsChunked(line, line.filters.Deposit(null, wallet), rpc),
+            queryLogsChunked(line, line.filters.Withdraw(null, null, wallet), rpc),
+            queryLogsChunked(line, line.filters.Borrowed(wallet), rpc),
+            queryLogsChunked(line, line.filters.Repaid(wallet), rpc),
+            queryLogsChunked(line, line.filters.Defaulted(wallet), rpc),
+            ADDRESSES.market ? queryLogsChunked(market, market.filters.Listed(null, wallet), rpc) : [],
+            ADDRESSES.market ? queryLogsChunked(market, market.filters.Cancelled(null, wallet), rpc) : [],
+            ADDRESSES.market ? queryLogsChunked(market, market.filters.Filled(null, wallet), rpc) : [],
+            ADDRESSES.market ? queryLogsChunked(market, market.filters.Filled(null, null, wallet), rpc) : [],
+            ADDRESSES.market ? queryLogsChunked(market, market.filters.PartiallyFilled(null, wallet), rpc) : [],
+            ADDRESSES.asc ? queryLogsChunked(asc, asc.filters.HistoryProved(wallet), rpc) : [],
+        ])
+
+    type Log = { args: unknown[]; blockNumber: number; transactionHash: string }
+
+    // PartiallyFilled indexes the buyer, not the seller, so a seller's partial sales are found
+    // through the ids of their own offers. Few offers per wallet, so one query each is fine.
+    const myOfferIds = listed.map((l) => (l as unknown as Log).args[0] as bigint)
+    const soldPart = (
+        await Promise.all(myOfferIds.map((id) => queryLogsChunked(market, market.filters.PartiallyFilled(id), rpc)))
+    ).flat()
+
+    const item = (log: unknown, kind: ActivityKind, amount: bigint, unit: Activity['unit'], detail: string) => {
+        const l = log as Log
+        return { kind, block: l.blockNumber, txHash: l.transactionHash, amount, unit, detail, time: 0 }
+    }
+    const a = (log: unknown, i: number) => (log as Log).args[i]
+
+    const items: Activity[] = [
+        ...deposits.map((l) => item(l, 'deposit', a(l, 2) as bigint, 'asset', `${formatAmount(a(l, 3) as bigint, 6)} shares minted`)),
+        ...withdrawals.map((l) => item(l, 'withdraw', a(l, 3) as bigint, 'asset', `${formatAmount(a(l, 4) as bigint, 6)} shares burned`)),
+        ...borrows.map((l) => item(l, 'borrow', a(l, 1) as bigint, 'asset', `score ${a(l, 2)} · due at block #${Number(a(l, 3)).toLocaleString()}`)),
+        ...repays.map((l) => item(l, 'repay', a(l, 1) as bigint, 'asset', (a(l, 2) as boolean) ? 'loan closed' : 'partial repayment')),
+        ...defaults.map((l) => item(l, 'default', a(l, 1) as bigint, 'asset', 'written off against depositors · −300 points')),
+        ...listed.map((l) => item(l, 'listed', a(l, 2) as bigint, 'shares', `asking ${formatAmount(a(l, 3) as bigint, 6)} · offer #${a(l, 0)}`)),
+        ...cancelled.map((l) => item(l, 'cancelled', 0n, 'shares', `offer #${a(l, 0)} — shares returned from escrow`)),
+        ...sold.map((l) => item(l, 'sold', a(l, 3) as bigint, 'shares', `received ${formatAmount(a(l, 4) as bigint, 6)} from ${shorten(a(l, 2) as string)}`)),
+        ...soldPart.map((l) => item(l, 'sold', a(l, 2) as bigint, 'shares', `received ${formatAmount(a(l, 3) as bigint, 6)} from ${shorten(a(l, 1) as string)} · partial, ${formatAmount(a(l, 4) as bigint, 6)} left on offer #${a(l, 0)}`)),
+        ...boughtWhole.map((l) => item(l, 'bought', a(l, 3) as bigint, 'shares', `paid ${formatAmount(a(l, 4) as bigint, 6)} · offer #${a(l, 0)}`)),
+        ...boughtPart.map((l) => item(l, 'bought', a(l, 2) as bigint, 'shares', `paid ${formatAmount(a(l, 3) as bigint, 6)} · partial, offer #${a(l, 0)}`)),
+        ...proved.map((l) =>
+            item(l, 'proved', 0n, 'asset', `${PROTOCOL_NAMES[Number(a(l, 1))] ?? 'protocol'} ${ACTION_LABELS[Number(a(l, 2))] ?? ''} · Ethereum block #${Number(a(l, 3)).toLocaleString()}`)
+        ),
+    ]
+
+    // One timestamp fetch per distinct block, not per event.
+    const blocks = [...new Set(items.map((i) => i.block))]
+    const times = new Map(
+        await Promise.all(blocks.map(async (b) => [b, Number((await rpc.getBlock(b))?.timestamp ?? 0)] as const))
+    )
+    for (const i of items) i.time = times.get(i.block) ?? 0
+
+    return { headBlock, activity: items.sort((x, y) => y.block - x.block) }
+}
+
+const DEMO_PORTFOLIO: Portfolio = {
+    headBlock: 5_445_000,
+    activity: [
+        { kind: 'repay', time: 1_756_540_000, block: 5_444_100, txHash: '', amount: 120_000_000n, unit: 'asset', detail: 'partial repayment' },
+        { kind: 'listed', time: 1_756_480_000, block: 5_440_200, txHash: '', amount: 25_000_000_000n, unit: 'shares', detail: 'asking 24,870 · offer #0' },
+        { kind: 'borrow', time: 1_756_300_000, block: 5_428_000, txHash: '', amount: 120_000_000n, unit: 'asset', detail: 'score 742 · due at block #4,112,900' },
+        { kind: 'deposit', time: 1_756_100_000, block: 5_414_000, txHash: '', amount: 25_000_000_000n, unit: 'asset', detail: '25,000 shares minted' },
+        { kind: 'proved', time: 1_756_000_000, block: 5_407_000, txHash: '', amount: 0n, unit: 'asset', detail: 'Aave V3 Repay · Ethereum block #21,948,306' },
+        { kind: 'proved', time: 1_755_990_000, block: 5_406_300, txHash: '', amount: 0n, unit: 'asset', detail: 'Morpho Blue Repay · Ethereum block #21,731,884' },
     ],
 }
 
