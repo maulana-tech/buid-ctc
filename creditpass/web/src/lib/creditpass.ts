@@ -1,4 +1,4 @@
-import { Contract, JsonRpcProvider, formatUnits } from 'ethers'
+import { Contract, JsonRpcProvider, formatUnits, isAddress } from 'ethers'
 
 export const RPC_URL = process.env.NEXT_PUBLIC_CREDITCOIN_RPC_URL ?? 'https://rpc.cc3-testnet.creditcoin.network'
 export const EXPLORER = process.env.NEXT_PUBLIC_CREDITCOIN_EXPLORER ?? 'https://creditcoin-testnet.blockscout.com'
@@ -317,16 +317,19 @@ export async function loadMarket(viewer?: string | null): Promise<Market> {
         return { ...DEMO_MARKET, viewer: viewer ? DEMO_MARKET.viewer : null }
     }
 
-    const rpc = provider()
-    const market = new Contract(ADDRESSES.market, MARKET_ABI, rpc)
-    const line = new Contract(ADDRESSES.line, LINE_ABI, rpc)
+    try {
+        const rpc = provider()
+        const market = new Contract(ADDRESSES.market, MARKET_ABI, rpc)
+        const line = new Contract(ADDRESSES.line, LINE_ABI, rpc)
 
-    const [ids, assetAddress] = await Promise.all([
-        market.openOffers() as Promise<bigint[]>,
-        line.asset() as Promise<string>,
-    ])
+        const [ids, assetAddress] = await Promise.all([
+            market.openOffers() as Promise<bigint[]>,
+            line.asset() as Promise<string>,
+        ])
 
-    const token = new Contract(assetAddress, ERC20_ABI, rpc)
+        if (!assetAddress || !isAddress(assetAddress)) return { ...DEMO_MARKET, viewer: viewer ? DEMO_MARKET.viewer : null }
+
+        const token = new Contract(assetAddress, ERC20_ABI, rpc)
     const [decimals, symbol] = await Promise.all([token.decimals() as Promise<bigint>, token.symbol() as Promise<string>])
     const unit = 10n ** BigInt(decimals)
     const sharePrice = (await line.convertToAssets(unit)) as bigint
@@ -368,6 +371,9 @@ export async function loadMarket(viewer?: string | null): Promise<Market> {
         symbol,
         viewer: position,
         demo: false,
+    }
+    } catch {
+        return { ...DEMO_MARKET, viewer: viewer ? DEMO_MARKET.viewer : null }
     }
 }
 
@@ -550,41 +556,47 @@ export type VaultPosition = {
 export async function loadVaultPosition(address: string): Promise<VaultPosition> {
     if (!isConfigured) return DEMO_POSITION
 
-    const rpc = provider()
-    const line = new Contract(ADDRESSES.line, LINE_ABI, rpc)
-    const token = new Contract(await line.asset(), ERC20_ABI, rpc)
+    try {
+        const rpc = provider()
+        const line = new Contract(ADDRESSES.line, LINE_ABI, rpc)
+        const assetAddress = await line.asset() as string
+        if (!assetAddress || !isAddress(assetAddress)) return DEMO_POSITION
+        const token = new Contract(assetAddress, ERC20_ABI, rpc)
 
-    const [shares, maxWithdraw, assetBalance, depositLogs, withdrawLogs] = await Promise.all([
-        line.balanceOf(address) as Promise<bigint>,
-        line.maxWithdraw(address) as Promise<bigint>,
-        token.balanceOf(address) as Promise<bigint>,
-        queryLogsChunked(line, line.filters.Deposit(null, address), rpc),
-        queryLogsChunked(line, line.filters.Withdraw(null, null, address), rpc),
-    ])
-    const shareValue = (await line.convertToAssets(shares)) as bigint
+        const [shares, maxWithdraw, assetBalance, depositLogs, withdrawLogs] = await Promise.all([
+            line.balanceOf(address) as Promise<bigint>,
+            line.maxWithdraw(address) as Promise<bigint>,
+            token.balanceOf(address) as Promise<bigint>,
+            queryLogsChunked(line, line.filters.Deposit(null, address), rpc),
+            queryLogsChunked(line, line.filters.Withdraw(null, null, address), rpc),
+        ])
+        const shareValue = (await line.convertToAssets(shares)) as bigint
 
-    const sum = (logs: unknown[], index: number) =>
-        logs.reduce<bigint>((acc, log) => acc + ((log as { args: unknown[] }).args[index] as bigint), 0n)
-    const assetsIn = sum(depositLogs, 2)
-    const sharesIn = sum(depositLogs, 3)
-    const netDeposited = assetsIn - sum(withdrawLogs, 3)
+        const sum = (logs: unknown[], index: number) =>
+            logs.reduce<bigint>((acc, log) => acc + ((log as { args: unknown[] }).args[index] as bigint), 0n)
+        const assetsIn = sum(depositLogs, 2)
+        const sharesIn = sum(depositLogs, 3)
+        const netDeposited = assetsIn - sum(withdrawLogs, 3)
 
-    const decimals = BigInt(await token.decimals())
-    const unit = 10n ** decimals
-    const entryPrice = sharesIn > 0n ? (assetsIn * unit) / sharesIn : null
-    const earned = entryPrice === null ? null : shareValue - (shares * entryPrice) / unit
+        const decimals = BigInt(await token.decimals())
+        const unit = 10n ** decimals
+        const entryPrice = sharesIn > 0n ? (assetsIn * unit) / sharesIn : null
+        const earned = entryPrice === null ? null : shareValue - (shares * entryPrice) / unit
 
-    return {
-        address,
-        shares,
-        shareValue,
-        netDeposited,
-        entryPrice,
-        earned,
-        maxWithdraw,
-        assetBalance,
-        deposits: depositLogs.length,
-        withdrawals: withdrawLogs.length,
+        return {
+            address,
+            shares,
+            shareValue,
+            netDeposited,
+            entryPrice,
+            earned,
+            maxWithdraw,
+            assetBalance,
+            deposits: depositLogs.length,
+            withdrawals: withdrawLogs.length,
+        }
+    } catch {
+        return DEMO_POSITION
     }
 }
 
@@ -611,9 +623,12 @@ export type VaultHistory = {
 export async function loadVaultHistory(samples = 40): Promise<VaultHistory> {
     if (!isConfigured) return DEMO_VAULT_HISTORY
 
-    const rpc = provider()
-    const line = new Contract(ADDRESSES.line, LINE_ABI, rpc)
-    const decimals = Number(await new Contract(await line.asset(), ERC20_ABI, rpc).decimals())
+    try {
+        const rpc = provider()
+        const line = new Contract(ADDRESSES.line, LINE_ABI, rpc)
+        const assetAddress = await line.asset() as string
+        if (!assetAddress || !isAddress(assetAddress)) return DEMO_VAULT_HISTORY
+        const decimals = Number(await new Contract(assetAddress, ERC20_ABI, rpc).decimals())
     const unit = 10n ** BigInt(decimals)
 
     const head = await rpc.getBlockNumber()
@@ -657,6 +672,9 @@ export async function loadVaultHistory(samples = 40): Promise<VaultHistory> {
     )
 
     return { points, events: events.sort((a, b) => a.time - b.time), decimals }
+    } catch {
+        return DEMO_VAULT_HISTORY
+    }
 }
 
 const DEMO_VAULT_HISTORY: VaultHistory = {
@@ -712,10 +730,11 @@ export type Portfolio = {
 export async function loadPortfolio(wallet: string): Promise<Portfolio> {
     if (!isConfigured) return DEMO_PORTFOLIO
 
-    const rpc = provider()
-    const line = new Contract(ADDRESSES.line, LINE_ABI, rpc)
-    const market = new Contract(ADDRESSES.market, MARKET_ABI, rpc)
-    const asc = new Contract(ADDRESSES.asc, ASC_ABI, rpc)
+    try {
+        const rpc = provider()
+        const line = new Contract(ADDRESSES.line, LINE_ABI, rpc)
+        const market = new Contract(ADDRESSES.market, MARKET_ABI, rpc)
+        const asc = new Contract(ADDRESSES.asc, ASC_ABI, rpc)
 
     const [headBlock, deposits, withdrawals, borrows, repays, defaults, listed, cancelled, sold, boughtWhole, boughtPart, proved] =
         await Promise.all([
@@ -773,6 +792,9 @@ export async function loadPortfolio(wallet: string): Promise<Portfolio> {
     for (const i of items) i.time = times.get(i.block) ?? 0
 
     return { headBlock, activity: items.sort((x, y) => y.block - x.block) }
+    } catch {
+        return DEMO_PORTFOLIO
+    }
 }
 
 const DEMO_PORTFOLIO: Portfolio = {
@@ -830,8 +852,9 @@ export type DirectoryEntry = {
 export async function loadDirectory(limit = 50): Promise<DirectoryEntry[]> {
     if (!isConfigured) return DEMO_DIRECTORY
 
-    const rpc = provider()
-    const registry = new Contract(ADDRESSES.registry, REGISTRY_ABI, rpc)
+    try {
+        const rpc = provider()
+        const registry = new Contract(ADDRESSES.registry, REGISTRY_ABI, rpc)
 
     const [repayments, liquidations] = await Promise.all([
         queryLogsChunked(registry, registry.filters.RepaymentRecorded(), rpc),
@@ -865,6 +888,9 @@ export async function loadDirectory(limit = 50): Promise<DirectoryEntry[]> {
             }
         })
     )
+    } catch {
+        return DEMO_DIRECTORY
+    }
 }
 
 const DEMO_DIRECTORY: DirectoryEntry[] = [
@@ -881,29 +907,53 @@ export async function loadSnapshot(address: string): Promise<Snapshot> {
     const registry = new Contract(ADDRESSES.registry, REGISTRY_ABI, rpc)
     const line = new Contract(ADDRESSES.line, LINE_ABI, rpc)
 
-    const [known, score, rawProfile, protocolCount, minScore, limit, owed, rawLoan, assetAddress] = await Promise.all([
-        registry.isKnown(address) as Promise<boolean>,
-        registry.scoreOf(address) as Promise<bigint>,
-        registry.profileOf(address),
-        registry.protocolCount(address) as Promise<bigint>,
-        line.MIN_SCORE() as Promise<bigint>,
-        line.creditLimit(address) as Promise<bigint>,
-        line.amountOwed(address) as Promise<bigint>,
-        line.loans(address),
-        line.asset() as Promise<string>,
-    ])
+    let known: boolean
+    let score: bigint
+    let rawProfile: [bigint, bigint, bigint, bigint, bigint, bigint]
+    let protocolCount: bigint
+    let minScore: bigint
+    let limit: bigint
+    let owed: bigint
+    let rawLoan: readonly unknown[]
+    let assetAddress: string
+    let totalAssets: bigint
+    let totalPrincipal: bigint
+    let availableLiquidity: bigint
+    let utilisationBps: bigint
+    let supplyAprBps: bigint
+    let borrowAprBps: bigint
+    let shares: bigint
+    let maxWithdraw: bigint
 
-    const [totalAssets, totalPrincipal, availableLiquidity, utilisationBps, supplyAprBps, borrowAprBps, shares, maxWithdraw] =
-        await Promise.all([
-            line.totalAssets() as Promise<bigint>,
-            line.totalPrincipal() as Promise<bigint>,
-            line.availableLiquidity() as Promise<bigint>,
-            line.utilisationBps() as Promise<bigint>,
-            line.supplyAprBps() as Promise<bigint>,
-            line.BORROW_APR_BPS() as Promise<bigint>,
-            line.balanceOf(address) as Promise<bigint>,
-            line.maxWithdraw(address) as Promise<bigint>,
+    try {
+        ;[known, score, rawProfile, protocolCount, minScore, limit, owed, rawLoan, assetAddress] = await Promise.all([
+            registry.isKnown(address) as Promise<boolean>,
+            registry.scoreOf(address) as Promise<bigint>,
+            registry.profileOf(address),
+            registry.protocolCount(address) as Promise<bigint>,
+            line.MIN_SCORE() as Promise<bigint>,
+            line.creditLimit(address) as Promise<bigint>,
+            line.amountOwed(address) as Promise<bigint>,
+            line.loans(address),
+            line.asset() as Promise<string>,
         ])
+
+        if (!assetAddress || !isAddress(assetAddress)) return DEMO
+
+        ;[totalAssets, totalPrincipal, availableLiquidity, utilisationBps, supplyAprBps, borrowAprBps, shares, maxWithdraw] =
+            await Promise.all([
+                line.totalAssets() as Promise<bigint>,
+                line.totalPrincipal() as Promise<bigint>,
+                line.availableLiquidity() as Promise<bigint>,
+                line.utilisationBps() as Promise<bigint>,
+                line.supplyAprBps() as Promise<bigint>,
+                line.BORROW_APR_BPS() as Promise<bigint>,
+                line.balanceOf(address) as Promise<bigint>,
+                line.maxWithdraw(address) as Promise<bigint>,
+            ])
+    } catch {
+        return DEMO
+    }
 
     const token = new Contract(assetAddress, ERC20_ABI, rpc)
     const [decimals, symbol, balance, shareValue] = await Promise.all([
