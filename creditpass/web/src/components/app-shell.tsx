@@ -21,9 +21,6 @@ import {
     type Eip1193Provider,
 } from '@/lib/wallet'
 
-/** An address to land on so the dashboard has something to show before you type anything. */
-const SAMPLE_ADDRESS = '0x7a3f4d1c2b9e8a5f6c0d3e2b1a9f8c7d6e5b4a30'
-
 const TABS = [
     { href: '/app', label: 'Passport' },
     { href: '/app/portfolio', label: 'Portfolio' },
@@ -61,7 +58,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             const requested = new URLSearchParams(window.location.search).get('address')
             if (requested && isAddress(requested)) return requested
         }
-        return SAMPLE_ADDRESS
+        return ''
     })
     const [address, setAddress] = useState(query)
     const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
@@ -261,6 +258,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                             className="h-10"
                             onClick={lookup}>
                             Look up
+                        </Button>
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-10"
+                            onClick={() => {
+                                const addr = '0x7a3f4d1c2b9e8a5f6c0d3e2b1a9f8c7d6e5b4a30'
+                                setQuery(addr)
+                                setAddress(addr)
+                            }}>
+                            Fill demo
                         </Button>
                     </div>
 
