@@ -1,10 +1,10 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { BrowserProvider, Contract, formatUnits, parseUnits } from 'ethers'
+import { BrowserProvider, Contract } from 'ethers'
 import { ArrowDown, Loader2 } from 'lucide-react'
 
-import { Faucet, Loading, Notice, Row, Stat, useApp } from '@/components/app-shell'
+import { AmountPanel, Faucet, Loading, Notice, Row, Stat, Summary, parseSafe, plain, useApp } from '@/components/app-shell'
 import { SharePriceChart } from '@/components/share-price-chart'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -26,19 +26,6 @@ import {
     type PriceHistory,
 } from '@/lib/creditpass'
 import { ensureCreditcoinNetwork } from '@/lib/wallet'
-
-function plain(value: bigint, decimals: number) {
-    return formatUnits(value, decimals).replace(/\.?0+$/, '') || '0'
-}
-
-function parseSafe(value: string, decimals: number): bigint | null {
-    if (!value.trim()) return null
-    try {
-        return parseUnits(value, decimals)
-    } catch {
-        return null
-    }
-}
 
 /**
  * Secondary market for vault shares, laid out as a swap.
@@ -279,7 +266,7 @@ function SwapCard({
             </div>
 
             <div className="relative mt-4 space-y-1">
-                <Panel
+                <AmountPanel
                     label="You pay"
                     token={mode === 'buy' ? symbol : 'cpUSD'}
                     value={payInput}
@@ -287,7 +274,6 @@ function SwapCard({
                     balance={payBalance}
                     decimals={decimals}
                     onMax={payBalance !== null && payBalance > 0n ? () => setPay(plain(payBalance, decimals)) : undefined}
-                    tone="input"
                 />
 
                 <button
@@ -298,7 +284,7 @@ function SwapCard({
                     <ArrowDown className={`size-4 duration-300 ${mode === 'sell' ? 'rotate-180' : ''}`} />
                 </button>
 
-                <Panel
+                <AmountPanel
                     label="You receive"
                     token={mode === 'buy' ? 'cpUSD' : symbol}
                     value={receive > 0n ? plain(receive, decimals) : ''}
@@ -326,7 +312,7 @@ function SwapCard({
             )}
 
             {pay !== null && pay > 0n && (
-                <div className="bg-muted/40 mt-3 space-y-2 rounded-xl px-3 py-2.5 text-xs">
+                <Summary>
                     {effectivePerShare !== null && (
                         <Row
                             label="Effective price"
@@ -352,7 +338,7 @@ function SwapCard({
                             value={`${formatAmount(sellNav, decimals)} ${symbol}`}
                         />
                     )}
-                </div>
+                </Summary>
             )}
 
             <Button
@@ -377,57 +363,6 @@ function SwapCard({
                 </div>
             )}
         </Card>
-    )
-}
-
-function Panel({
-    label,
-    token,
-    value,
-    onChange,
-    balance,
-    decimals,
-    onMax,
-    tone,
-}: {
-    label: string
-    token: string
-    value: string
-    onChange?: (v: string) => void
-    balance: bigint | null
-    decimals: number
-    onMax?: () => void
-    tone: 'input' | 'output'
-}) {
-    return (
-        <div className={`rounded-2xl border p-4 ${tone === 'input' ? 'bg-card' : 'bg-muted/40'}`}>
-            <div className="text-muted-foreground text-xs">{label}</div>
-            <div className="mt-2 flex items-center gap-3">
-                <input
-                    value={value}
-                    onChange={onChange ? (e) => onChange(e.target.value) : undefined}
-                    readOnly={!onChange}
-                    placeholder="0"
-                    inputMode="decimal"
-                    className="placeholder:text-muted-foreground/50 min-w-0 flex-1 bg-transparent text-3xl font-semibold tracking-tight outline-none"
-                />
-                <div className="bg-background flex shrink-0 items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium">
-                    <span className="bg-foreground text-background flex size-5 items-center justify-center rounded-full text-[10px]">{token[0]}</span>
-                    {token}
-                </div>
-            </div>
-            <div className="text-muted-foreground mt-2 flex items-center justify-between text-xs">
-                <span>{balance !== null ? `Balance ${formatAmount(balance, decimals)}` : ''}</span>
-                {onMax && (
-                    <button
-                        type="button"
-                        onClick={onMax}
-                        className="hover:text-foreground">
-                        Max
-                    </button>
-                )}
-            </div>
-        </div>
     )
 }
 

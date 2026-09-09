@@ -1,20 +1,29 @@
 'use client'
 
-import { AmountAction, Faucet, Loading, Row, Stat, useApp } from '@/components/app-shell'
+import { useState } from 'react'
+
+import { AmountAction, Faucet, Loading, ModeToggle, Row, Stat, useApp } from '@/components/app-shell'
 import { Card } from '@/components/ui/card'
 import { formatAmount, formatPercent, tierOf } from '@/lib/creditpass'
 
+/** Mirrors CreditLine: ~30-day term at ~15s blocks, simple interest per block. */
+const TERM_BLOCKS = 172_800n
+const BLOCKS_PER_YEAR = 2_102_400n
+
 export default function BorrowPage() {
-    const { snapshot, owns } = useApp()
+    const { snapshot, owns, wallet } = useApp()
+    const [mode, setMode] = useState<'borrow' | 'repay'>('borrow')
     if (!snapshot) return <Loading />
 
     const { decimals, symbol } = snapshot.asset
     const tier = tierOf(snapshot.score, snapshot.minScore)
     const headroom = snapshot.limit > snapshot.loan.principal ? snapshot.limit - snapshot.loan.principal : 0n
+    const drawable = headroom < snapshot.vault.availableLiquidity ? headroom : snapshot.vault.availableLiquidity
+    const interestAtTerm = (value: bigint) => (value * BigInt(snapshot.vault.borrowAprBps) * TERM_BLOCKS) / (10_000n * BLOCKS_PER_YEAR)
 
     return (
-        <div className="grid gap-6 lg:grid-cols-3">
-            <div className="space-y-6 lg:col-span-2">
+        <div className="grid gap-6 lg:grid-cols-5">
+            <div className="space-y-6 lg:col-span-3">
                 <Card className="p-6">
                     <div className="text-muted-foreground text-sm">Your credit line</div>
                     <div className="mt-2 flex items-baseline gap-3">
@@ -54,7 +63,7 @@ export default function BorrowPage() {
                         drops 300 points — enough to shut the credit line entirely and stay shut until you rebuild the record. The penalty is the
                         reputation, and the reputation is bound to an address whose history you cannot recreate.
                     </p>
-                    <div className="mt-6 grid gap-4 sm:grid-cols-3">
+                    <div className="mt-6 grid gap-x-8 gap-y-3 sm:grid-cols-2">
                         <Row
                             label="Term"
                             value="~30 days"
@@ -71,63 +80,101 @@ export default function BorrowPage() {
                 </Card>
             </div>
 
-            <Card className="flex flex-col gap-6 p-6">
-                <div>
-                    <div className="text-muted-foreground text-sm">Open loan</div>
-                    <div className="mt-4 space-y-3">
-                        <Row
-                            label="Principal"
-                            value={`${formatAmount(snapshot.loan.principal, decimals)} ${symbol}`}
-                        />
-                        <Row
-                            label="Owed with interest"
-                            value={`${formatAmount(snapshot.owed, decimals)} ${symbol}`}
-                            strong
-                        />
-                        <Row
-                            label="Due at block"
-                            value={snapshot.loan.active ? `#${snapshot.loan.dueBlock.toLocaleString()}` : '—'}
-                        />
-                        <Row
-                            label="Wallet balance"
-                            value={`${formatAmount(snapshot.asset.balance, decimals)} ${symbol}`}
-                        />
-                    </div>
-                </div>
-
-                <div className="space-y-6 border-t pt-6">
-                    <div>
-                        <div className="mb-3 text-sm font-medium">Borrow</div>
-                        <AmountAction
-                            method="borrow"
-                            label="Borrow"
-                            max={headroom < snapshot.vault.availableLiquidity ? headroom : snapshot.vault.availableLiquidity}
-                            disabled={!owns || snapshot.loan.active || headroom === 0n}
-                            disabledReason={
-                                snapshot.loan.active
-                                    ? 'Repay the open loan before drawing again.'
-                                    : headroom === 0n
-                                      ? 'No headroom on this score.'
-                                      : 'Connect this address to borrow against it.'
-                            }
-                        />
+            <div className="lg:col-span-2">
+                <Card className="p-5">
+                    <div className="flex items-center justify-between">
+                        <div className="text-lg font-semibold tracking-tight">Borrow</div>
+                        <div className="text-muted-foreground text-xs">{formatPercent(snapshot.vault.borrowAprBps)} APR · ~30 days</div>
                     </div>
 
-                    <div>
-                        <div className="mb-3 text-sm font-medium">Repay</div>
-                        <AmountAction
-                            method="repay"
-                            label="Repay"
-                            max={snapshot.owed}
-                            disabled={!owns || !snapshot.loan.active}
-                            disabledReason={snapshot.loan.active ? 'Connect this address to repay it.' : 'No open loan.'}
+                    <div className="mt-4 flex items-baseline gap-2">
+                        <span className="text-4xl font-semibold tracking-tight tabular-nums">{formatAmount(snapshot.owed, decimals)}</span>
+                        <span className="text-muted-foreground">{symbol} owed</span>
+                    </div>
+                    <div className="text-muted-foreground mt-1 text-sm">
+                        {snapshot.loan.active
+                            ? `${formatAmount(snapshot.loan.principal, decimals)} ${symbol} principal · due at block #${snapshot.loan.dueBlock.toLocaleString()}`
+                            : 'No open loan.'}
+                    </div>
+
+                    <div className="mt-6 border-t pt-5">
+                        <ModeToggle
+                            modes={['borrow', 'repay'] as const}
+                            mode={mode}
+                            onChange={setMode}
                         />
                         <div className="mt-3">
-                            <Faucet />
+                            {mode === 'borrow' ? (
+                                <AmountAction
+                                    key="borrow"
+                                    method="borrow"
+                                    label="Borrow"
+                                    max={drawable}
+                                    disabled={!owns || snapshot.loan.active || headroom === 0n}
+                                    disabledReason={
+                                        snapshot.loan.active
+                                            ? 'Repay the open loan before drawing again.'
+                                            : headroom === 0n
+                                              ? 'No headroom on this score.'
+                                              : 'Connect this address to borrow against it.'
+                                    }
+                                    hint="Draws against your proved history. Nothing is posted as collateral."
+                                    summary={(value) => (
+                                        <>
+                                            <Row
+                                                label="Interest at term"
+                                                value={`≈ ${formatAmount(interestAtTerm(value), decimals)} ${symbol}`}
+                                            />
+                                            <Row
+                                                label="Owed at term"
+                                                value={`≈ ${formatAmount(value + interestAtTerm(value), decimals)} ${symbol}`}
+                                                strong
+                                            />
+                                            <Row
+                                                label="Headroom after"
+                                                value={`${formatAmount(headroom - value, decimals)} ${symbol}`}
+                                            />
+                                        </>
+                                    )}
+                                />
+                            ) : (
+                                <AmountAction
+                                    key="repay"
+                                    method="repay"
+                                    label="Repay"
+                                    max={snapshot.owed < snapshot.asset.balance ? snapshot.owed : snapshot.asset.balance}
+                                    disabled={!owns || !snapshot.loan.active}
+                                    disabledReason={snapshot.loan.active ? 'Connect this address to repay it.' : 'No open loan.'}
+                                    hint="Repaying in full on time adds to your score. Interest is settled at repayment."
+                                    summary={(value) => (
+                                        <>
+                                            <Row
+                                                label="Owed now"
+                                                value={`${formatAmount(snapshot.owed, decimals)} ${symbol}`}
+                                            />
+                                            <Row
+                                                label="Remaining after"
+                                                value={`${formatAmount(snapshot.owed > value ? snapshot.owed - value : 0n, decimals)} ${symbol}`}
+                                                strong
+                                            />
+                                            <Row
+                                                label="Wallet after"
+                                                value={`${formatAmount(snapshot.asset.balance - value, decimals)} ${symbol}`}
+                                            />
+                                        </>
+                                    )}
+                                />
+                            )}
                         </div>
+
+                        {wallet && !snapshot.demo && (
+                            <div className="mt-4 border-t pt-4">
+                                <Faucet />
+                            </div>
+                        )}
                     </div>
-                </div>
-            </Card>
+                </Card>
+            </div>
         </div>
     )
 }

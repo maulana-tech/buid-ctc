@@ -1,28 +1,15 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { BrowserProvider, Contract, formatUnits, parseUnits } from 'ethers'
+import { BrowserProvider, Contract } from 'ethers'
 import { Loader2 } from 'lucide-react'
 
-import { Faucet, Loading, Notice, Row, Stat, useApp } from '@/components/app-shell'
+import { AmountPanel, Faucet, Loading, ModeToggle, Notice, Row, Stat, Summary, parseSafe, plain, useApp } from '@/components/app-shell'
 import { VaultChart } from '@/components/vault-chart'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { ADDRESSES, ERC20_ABI, LINE_ABI, formatAmount, formatPercent, loadVaultHistory, loadVaultPosition, shorten, type VaultHistory, type VaultPosition } from '@/lib/creditpass'
 import { ensureCreditcoinNetwork } from '@/lib/wallet'
-
-function plain(value: bigint, decimals: number) {
-    return formatUnits(value, decimals).replace(/\.?0+$/, '') || '0'
-}
-function parseSafe(value: string, decimals: number): bigint | null {
-    if (!value.trim()) return null
-    try {
-        return parseUnits(value, decimals)
-    } catch {
-        return null
-    }
-}
 
 /** Blocks per year on Creditcoin at ~15s. Mirrors CreditLine.BLOCKS_PER_YEAR. */
 const BLOCKS_PER_YEAR = 2_102_400
@@ -283,53 +270,42 @@ function PositionCard({
             )}
 
             <div className="mt-6 border-t pt-5">
-                <div className="bg-muted flex rounded-full p-1 text-sm">
-                    {(['supply', 'withdraw'] as const).map((m) => (
-                        <button
-                            key={m}
-                            type="button"
-                            onClick={() => {
-                                setMode(m)
-                                setInput('')
-                            }}
-                            className={`flex-1 rounded-full py-1.5 capitalize duration-150 ${mode === m ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
-                            {m}
-                        </button>
-                    ))}
-                </div>
+                <ModeToggle
+                    modes={['supply', 'withdraw'] as const}
+                    mode={mode}
+                    onChange={(m) => {
+                        setMode(m)
+                        setInput('')
+                    }}
+                />
 
-                <div className="relative mt-3">
-                    <Input
+                <div className="mt-3">
+                    <AmountPanel
+                        label={mode === 'supply' ? 'You supply' : 'You withdraw'}
+                        token={symbol}
                         value={input}
-                        onChange={(e) => setInput(e.target.value)}
-                        placeholder={`Amount in ${symbol}`}
-                        inputMode="decimal"
-                        className="h-11 pr-14 text-base"
+                        onChange={setInput}
+                        balance={limit}
+                        balanceLabel={mode === 'supply' ? 'Balance' : 'Withdrawable'}
+                        decimals={decimals}
+                        onMax={limit !== null && limit > 0n ? () => setInput(plain(limit, decimals)) : undefined}
                     />
-                    {limit !== null && limit > 0n && (
-                        <button
-                            type="button"
-                            onClick={() => setInput(plain(limit, decimals))}
-                            className="text-muted-foreground hover:text-foreground absolute right-3 top-1/2 -translate-y-1/2 text-xs">
-                            Max
-                        </button>
-                    )}
                 </div>
 
                 {position && (
-                    <div className="bg-muted/40 mt-3 space-y-2 rounded-xl px-3 py-2.5 text-xs">
+                    <Summary>
                         <Row label={mode === 'supply' && amount ? 'Position after' : 'Position'} value={`${formatAmount(base, decimals)} ${symbol}`} />
                         <Row label="At today's rate, per month" value={`≈ ${formatAmount(monthly, decimals)} ${symbol}`} />
                         <Row label="Per year" value={`≈ ${formatAmount(yearly, decimals)} ${symbol}`} strong />
                         <p className="text-muted-foreground pt-1">
                             Arithmetic on the rate right now ({formatPercent(supplyAprBps)}). It changes the moment utilisation does.
                         </p>
-                    </div>
+                    </Summary>
                 )}
 
                 <Button
                     size="lg"
-                    className="mt-3 h-11 w-full"
+                    className="mt-4 h-12 w-full text-base"
                     disabled={!canSubmit}
                     onClick={() => (mode === 'supply' ? onSupply(amount!) : onWithdraw(amount!))}>
                     {busy ? <Loader2 className="animate-spin" /> : null}
@@ -338,7 +314,11 @@ function PositionCard({
                 <p className="text-muted-foreground mt-2 min-h-4 text-xs">
                     {problem ?? (mode === 'supply' ? 'Mints cpUSD shares at the current share price. No lock-up.' : 'Burns shares for the asset. Capped by cash on hand; the rest can be sold on Swap.')}
                 </p>
-                {error && <Notice tone="warn">{error}</Notice>}
+                {error && (
+                    <div className="mt-3">
+                        <Notice tone="warn">{error}</Notice>
+                    </div>
+                )}
 
                 {connected && !demo && (
                     <div className="mt-4 border-t pt-4">

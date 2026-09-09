@@ -7,16 +7,18 @@ import { Card } from '@/components/ui/card'
 import { formatAmount, formatPercent } from '@/lib/creditpass'
 
 export default function WithdrawPage() {
-    const { snapshot } = useApp()
+    const { snapshot, owns } = useApp()
     if (!snapshot) return <Loading />
 
     const { decimals, symbol } = snapshot.asset
     const { vault } = snapshot
+    const unit = 10n ** BigInt(decimals)
     const locked = vault.shareValue > vault.maxWithdraw ? vault.shareValue - vault.maxWithdraw : 0n
+    const sharePrice = vault.shares > 0n ? (vault.shareValue * unit) / vault.shares : unit
 
     return (
-        <div className="grid gap-6 lg:grid-cols-3">
-            <div className="space-y-6 lg:col-span-2">
+        <div className="grid gap-6 lg:grid-cols-5">
+            <div className="space-y-6 lg:col-span-3">
                 <Card className="p-6">
                     <div className="text-muted-foreground text-sm">Withdrawable now</div>
                     <div className="mt-2 flex items-baseline gap-3">
@@ -71,42 +73,61 @@ export default function WithdrawPage() {
                 </Card>
             </div>
 
-            <Card className="flex flex-col gap-6 p-6">
-                <div>
-                    <div className="text-muted-foreground text-sm">Withdraw</div>
-                    <div className="mt-4 space-y-3">
-                        <Row
-                            label="Shares held"
-                            value={formatAmount(vault.shares, decimals)}
-                        />
-                        <Row
-                            label="Redeemable"
-                            value={`${formatAmount(vault.maxWithdraw, decimals)} ${symbol}`}
-                            strong
+            <div className="lg:col-span-2">
+                <Card className="p-5">
+                    <div className="flex items-center justify-between">
+                        <div className="text-lg font-semibold tracking-tight">Withdraw</div>
+                        <div className="text-muted-foreground text-xs">
+                            1 share = {formatAmount(sharePrice, decimals, 4)} {symbol}
+                        </div>
+                    </div>
+
+                    <div className="mt-4 flex items-baseline gap-2">
+                        <span className="text-4xl font-semibold tracking-tight tabular-nums">{formatAmount(vault.shareValue, decimals)}</span>
+                        <span className="text-muted-foreground">{symbol}</span>
+                    </div>
+                    <div className="text-muted-foreground mt-1 text-sm">
+                        {formatAmount(vault.shares, decimals)} cpUSD shares
+                        {locked > 0n ? ` · ${formatAmount(locked, decimals)} ${symbol} out on loan` : ''}
+                    </div>
+
+                    <div className="mt-6 border-t pt-5">
+                        <AmountAction
+                            method="withdraw"
+                            label="Withdraw"
+                            max={vault.maxWithdraw}
+                            disabled={!owns || vault.maxWithdraw === 0n}
+                            disabledReason={
+                                vault.maxWithdraw === 0n ? 'Nothing withdrawable — the pool is fully lent out or you hold no shares.' : 'Connect this address to withdraw from it.'
+                            }
+                            hint="Burns shares for the asset at the current share price. Capped by cash on hand; the rest can be sold on Swap."
+                            summary={(value) => (
+                                <>
+                                    <Row
+                                        label="Shares burned"
+                                        value={`≈ ${formatAmount((value * unit) / sharePrice, decimals)} cpUSD`}
+                                    />
+                                    <Row
+                                        label="Position after"
+                                        value={`${formatAmount(vault.shareValue - value, decimals)} ${symbol}`}
+                                        strong
+                                    />
+                                </>
+                            )}
                         />
                     </div>
-                </div>
 
-                <div className="border-t pt-6">
-                    <AmountAction
-                        method="withdraw"
-                        label="Withdraw"
-                        max={vault.maxWithdraw}
-                        disabled={vault.maxWithdraw === 0n}
-                        disabledReason="Nothing withdrawable — the pool is fully lent out or you hold no shares."
-                    />
-                </div>
-
-                <p className="text-muted-foreground mt-auto border-t pt-4 text-xs">
-                    Want to add instead?{' '}
-                    <Link
-                        href="/app/earn"
-                        className="hover:text-foreground underline">
-                        Supply on the Earn page
-                    </Link>
-                    .
-                </p>
-            </Card>
+                    <p className="text-muted-foreground mt-4 border-t pt-4 text-xs">
+                        Want to add instead?{' '}
+                        <Link
+                            href="/app/earn"
+                            className="hover:text-foreground underline">
+                            Supply on the Earn page
+                        </Link>
+                        .
+                    </p>
+                </Card>
+            </div>
         </div>
     )
 }
