@@ -9,3 +9,10 @@ node_modules/
 # Secrets, at any depth.
 .env
 .env.local
+
+# Honk verifier build (zk Foundry profile) and circuit scratch outputs. The compiled circuit and
+# its verification key are committed so tests run without nargo/bb installed.
+/out-zk/
+circuits/*/target/*.gz
+circuits/*/target/zkfixture/
+circuits/*/Prover.toml

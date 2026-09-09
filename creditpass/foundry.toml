@@ -8,6 +8,7 @@ remappings = [
     "@gluwa/asc-contracts/=node_modules/@gluwa/asc-contracts/",
     "@openzeppelin/contracts/=node_modules/@openzeppelin/contracts/",
     "forge-std/=lib/forge-std/src/",
+    "poseidon-solidity/=node_modules/poseidon-solidity/",
 ]
 solc_version = "0.8.30"
 optimizer = true
@@ -18,7 +19,22 @@ evm_version = "shanghai"
 verbosity = 2
 
 # Real-proof fixtures captured from the live Proof Builder. Read-only, scoped to that folder.
-fs_permissions = [{ access = "read", path = "./test/fixtures" }]
+fs_permissions = [{ access = "read", path = "./test/fixtures" }, { access = "read", path = "./out" }, { access = "read", path = "./out-zk" }]
+
+# Barretenberg's Honk verifier only compiles without via_ir, and the rest of the project only
+# compiles with it. So the verifier gets its own profile and output dir; tests and deploy scripts
+# read out-zk/. Build both: `forge build && FOUNDRY_PROFILE=zk forge build`.
+skip = ["*/HonkVerifier.sol"]
+
+[profile.zk]
+src = "contracts/zk"
+test = "nonexistent"
+script = "nonexistent"
+out = "out-zk"
+via_ir = false
+# The zero-knowledge flavour of the verifier is 25.0KB at 200 runs — over EIP-170 — and 24.0KB at 1.
+optimizer_runs = 1
+skip = []
 
 [lint]
 lint_on_build = false

@@ -30,8 +30,13 @@ function artifact(path: string) {
     return JSON.parse(readFileSync(new URL(`../out/${path}`, import.meta.url), 'utf8'))
 }
 
-async function deploy(name: string, path: string, wallet: NonceManager, args: unknown[] = []) {
-    const { abi, bytecode } = artifact(path)
+/** The Honk verifier is built by the `zk` Foundry profile into out-zk/ — see foundry.toml. */
+function zkArtifact(path: string) {
+    return JSON.parse(readFileSync(new URL(`../out-zk/${path}`, import.meta.url), 'utf8'))
+}
+
+async function deploy(name: string, path: string, wallet: NonceManager, args: unknown[] = [], zk = false) {
+    const { abi, bytecode } = zk ? zkArtifact(path) : artifact(path)
     const factory = new ContractFactory(abi, bytecode.object ?? bytecode, wallet)
     const contract = await factory.deploy(...args)
     await contract.waitForDeployment()
@@ -76,7 +81,9 @@ async function main() {
     const deployBlock = await provider.getBlockNumber()
 
     console.log('Deploying')
-    const registry = await deploy('CreditRegistry', 'CreditRegistry.sol/CreditRegistry.json', wallet)
+    const poseidon = await deploy('PoseidonT3', 'PoseidonT3.sol/PoseidonT3.json', wallet, [], true)
+    const verifier = await deploy('HonkVerifier', 'HonkVerifier.sol/HonkVerifier.json', wallet, [], true)
+    const registry = await deploy('CreditRegistry', 'CreditRegistry.sol/CreditRegistry.json', wallet, [await poseidon.getAddress()])
     const asc = await deploy('LendingHistoryASC', 'LendingHistoryASC.sol/LendingHistoryASC.json', wallet, [
         await registry.getAddress(),
     ])
@@ -84,6 +91,7 @@ async function main() {
     const line = await deploy('CreditLine', 'CreditLine.sol/CreditLine.json', wallet, [
         await usd.getAddress(),
         await registry.getAddress(),
+        await verifier.getAddress(),
         LIMIT_UNIT,
     ])
     const market = await deploy('ShareMarket', 'ShareMarket.sol/ShareMarket.json', wallet, [await line.getAddress()])

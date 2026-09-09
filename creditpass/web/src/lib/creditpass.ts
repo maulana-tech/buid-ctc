@@ -58,6 +58,13 @@ export const PROTOCOL_POOLS: Record<number, string> = {
 
 export const REGISTRY_ABI = [
     'function isKnown(address) view returns (bool)',
+    'function setCommitment(uint256 commitment)',
+    'function commitmentOf(address) view returns (uint256)',
+    'function merklePath(address user) view returns (uint256[16] siblings, uint32 index, uint256 currentRoot)',
+    'function root() view returns (uint256)',
+    'function isKnownRoot(uint256) view returns (bool)',
+    'function nullifierDefaults(uint256) view returns (uint32)',
+    'event CommitmentSet(address indexed user, uint256 commitment)',
     'function scoreOf(address) view returns (uint16)',
     'function protocolCount(address) view returns (uint8)',
     'function profileOf(address) view returns (tuple(uint32 repayments, uint32 borrows, uint32 liquidations, uint32 defaults, uint64 firstSeenBlock, uint64 lastCountedBlock, uint32 protocols))',
@@ -67,6 +74,11 @@ export const REGISTRY_ABI = [
 ]
 
 export const LINE_ABI = [
+    'function borrowPrivate(uint256 amount, uint16 threshold, uint256 root, uint256 nullifier, bytes proof)',
+    'function limitForScore(uint16 score) view returns (uint256)',
+    'function privateNullifier(address) view returns (uint256)',
+    'function nullifierHasLoan(uint256) view returns (bool)',
+    'event BorrowedPrivately(address indexed borrower, uint256 indexed nullifier, uint16 threshold, uint256 amount)',
     'function asset() view returns (address)',
     'function MIN_SCORE() view returns (uint16)',
     'function BORROW_APR_BPS() view returns (uint256)',
@@ -153,7 +165,7 @@ export type Snapshot = {
     profile: Profile
     limit: bigint
     owed: bigint
-    loan: { principal: bigint; repaid: bigint; dueBlock: number; active: boolean }
+    loan: { principal: bigint; repaid: bigint; dueBlock: number; active: boolean; private: boolean }
     vault: {
         totalAssets: bigint
         totalPrincipal: bigint
@@ -295,7 +307,7 @@ const DEMO: Snapshot = {
     },
     limit: 500_000_000n,
     owed: 121_400_000n,
-    loan: { principal: 120_000_000n, repaid: 0n, dueBlock: 4_112_900, active: true },
+    loan: { principal: 120_000_000n, repaid: 0n, dueBlock: 4_112_900, active: true, private: false },
     vault: {
         totalAssets: 1_000_000_000_000n,
         totalPrincipal: 412_000_000_000n,
@@ -947,6 +959,63 @@ export async function submitProof(signer: import('ethers').Signer, p: ProofPaylo
     return { txHash: tx.hash, user, counted, skipReason, scoreAfter }
 }
 
+/** Everything the private-credit page needs about one identity, read for the scored address. */
+export type PrivateCredit = {
+    known: boolean
+    score: number
+    /** Commitment currently on chain for the address; 0 when none. */
+    commitment: bigint
+    index: number
+    siblings: bigint[]
+    root: bigint
+    defaults: number
+    hasLoan: boolean
+    /** Credit limit each band would grant, keyed by threshold. */
+    limits: Record<number, bigint>
+    minScore: number
+}
+
+export const BAND_THRESHOLDS = [500, 600, 700, 800] as const
+
+export async function loadPrivateCredit(address: string, nullifier: bigint): Promise<PrivateCredit> {
+    const rpc = provider()
+    const registry = new Contract(ADDRESSES.registry, REGISTRY_ABI, rpc)
+    const line = new Contract(ADDRESSES.line, LINE_ABI, rpc)
+    // A registry deployed before private credit has no commitmentOf(); say so instead of dumping
+    // a CALL_EXCEPTION on the page.
+    const commitment = (await (registry.commitmentOf(address) as Promise<bigint>).catch(() => null)) as bigint | null
+    if (commitment === null) throw new Error('The deployed contracts predate private credit. Redeploy with `npm run deploy:testnet`.')
+    const [known, score, defaults, hasLoan, minScore, ...limits] = await Promise.all([
+        registry.isKnown(address) as Promise<boolean>,
+        registry.scoreOf(address) as Promise<bigint>,
+        registry.nullifierDefaults(nullifier) as Promise<bigint>,
+        line.nullifierHasLoan(nullifier) as Promise<boolean>,
+        line.MIN_SCORE() as Promise<bigint>,
+        ...BAND_THRESHOLDS.map((t) => line.limitForScore(t) as Promise<bigint>),
+    ])
+    let index = 0
+    let siblings: bigint[] = []
+    let root = 0n
+    if (known) {
+        const path = (await registry.merklePath(address)) as [bigint[], bigint, bigint]
+        siblings = [...path[0]]
+        index = Number(path[1])
+        root = path[2]
+    }
+    return {
+        known,
+        score: Number(score),
+        commitment,
+        index,
+        siblings,
+        root,
+        defaults: Number(defaults),
+        hasLoan,
+        minScore: Number(minScore),
+        limits: Object.fromEntries(BAND_THRESHOLDS.map((t, i) => [t, limits[i] as bigint])),
+    }
+}
+
 export type DirectoryEntry = {
     address: string
     score: number
@@ -1036,6 +1105,7 @@ export async function loadSnapshot(address: string): Promise<Snapshot> {
     let borrowAprBps: bigint
     let shares: bigint
     let maxWithdraw: bigint
+    let privateNullifier = 0n
 
     try {
         ;[known, score, rawProfile, protocolCount, minScore, limit, owed, rawLoan, assetAddress] = await Promise.all([
@@ -1049,6 +1119,7 @@ export async function loadSnapshot(address: string): Promise<Snapshot> {
             line.loans(address),
             line.asset() as Promise<string>,
         ])
+        privateNullifier = (await line.privateNullifier(address).catch(() => 0n)) as bigint
 
         if (!assetAddress || !isAddress(assetAddress)) return DEMO
 
@@ -1124,6 +1195,7 @@ export async function loadSnapshot(address: string): Promise<Snapshot> {
             repaid: rawLoan[1] as bigint,
             dueBlock: Number(rawLoan[3]),
             active: rawLoan[4] as boolean,
+            private: privateNullifier !== 0n,
         },
         vault: {
             totalAssets,

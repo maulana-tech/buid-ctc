@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {INativeQueryVerifier} from "@gluwa/asc-contracts/contracts/write-ability/common/INativeQueryVerifier.sol";
 
 import {CreditRegistry} from "../contracts/CreditRegistry.sol";
+import {Zk} from "./harness/Zk.sol";
 import {LendingHistoryASC} from "../contracts/LendingHistoryASC.sol";
 import {MockNativeQueryVerifier} from "./mocks/MockNativeQueryVerifier.sol";
 
@@ -41,7 +42,7 @@ contract RealProofTest is Test {
         verifier = new MockNativeQueryVerifier();
         vm.etch(PRECOMPILE, address(verifier).code);
 
-        registry = new CreditRegistry();
+        registry = new CreditRegistry(Zk.deployPoseidon());
         asc = new LendingHistoryASC(registry);
         registry.setReporter(address(asc), true);
     }

@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 
 import {CreditLine} from "../contracts/CreditLine.sol";
 import {CreditRegistry} from "../contracts/CreditRegistry.sol";
+import {Zk} from "./harness/Zk.sol";
 import {ShareMarket} from "../contracts/ShareMarket.sol";
 import {MockERC20} from "./MockERC20.sol";
 
@@ -26,9 +27,9 @@ contract ShareMarketTest is Test {
     uint256 internal constant SEED = 1_000e6;
 
     function setUp() public {
-        registry = new CreditRegistry();
+        registry = new CreditRegistry(Zk.deployPoseidon());
         token = new MockERC20();
-        line = new CreditLine(token, registry, LIMIT_UNIT);
+        line = new CreditLine(token, registry, Zk.deployVerifier(), LIMIT_UNIT);
         market = new ShareMarket(line);
 
         registry.setReporter(address(this), true);
@@ -185,9 +186,9 @@ contract ShareMarketPartialFillTest is Test {
     address internal buyer = address(0xB0FFEE);
 
     function setUp() public {
-        registry = new CreditRegistry();
+        registry = new CreditRegistry(Zk.deployPoseidon());
         token = new MockERC20();
-        line = new CreditLine(token, registry, 100e6);
+        line = new CreditLine(token, registry, Zk.deployVerifier(), 100e6);
         market = new ShareMarket(line);
 
         token.mint(lender, 1_000e6);

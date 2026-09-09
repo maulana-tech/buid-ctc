@@ -16,11 +16,12 @@ precompile accept our proofs?**
 | Node 20+ | `node -v` |
 | pnpm | `pnpm -v` |
 | Foundry | `forge --version` |
+| nargo 1.0.0-beta.9 + bb 0.87 | optional — only to change the circuit (`npm run zk:build`); the compiled circuit, vk and verifier are committed |
 
 ```bash
 npm install
-forge build
-npm run verify          # ABI check + 54 tests. Do this before spending gas.
+forge build && FOUNDRY_PROFILE=zk forge build   # the Honk verifier needs its own profile
+npm run verify          # ABI check + both builds + 65 tests. Do this before spending gas.
 ```
 
 ---
@@ -178,8 +179,15 @@ A guarantee is only a claim until you watch it refuse something.
 
 ## Redeploying
 
-Just run `npm run deploy:testnet` again. It deploys a fresh set and rewrites `web/.env.local`; the
-old contracts stay on chain, ignored. There is no migration, because there is no state worth
+Just run `npm run deploy:testnet` again. It deploys a fresh set (Poseidon, Honk verifier, registry,
+ASC, token, credit line, market) and rewrites `web/.env.local`; the old contracts stay on chain,
+ignored. Then re-prove the three fixture transactions so the passports come back:
+
+```bash
+for f in test/fixtures/*-repay.json; do
+  npm run prove -- $(node -p "const f=require('./$f');[f.txHash,f.protocolId,'Repay'].join(' ')")
+done
+``` There is no migration, because there is no state worth
 migrating — every credit profile can be rebuilt by re-running the worker, which is rather the point
 of history that lives on another chain.
 

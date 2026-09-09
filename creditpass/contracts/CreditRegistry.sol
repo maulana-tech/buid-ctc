@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
+import {IPoseidonT3} from "./zk/IPoseidonT3.sol";
+
 /// @title CreditRegistry
 /// @notice The public credit primitive. Holds one non-transferable credit profile per address,
 ///         built exclusively from cross-chain events that were cryptographically attested by the
@@ -36,6 +38,32 @@ contract CreditRegistry {
     uint16 public constant POINTS_PER_AGE_STEP = 10;
     uint16 public constant MAX_AGE_BONUS = 100;
 
+    // ------------------------------------------------------------ private credit
+    //
+    // Every profile is also a leaf in a Poseidon Merkle tree, so a user can prove "my score is at
+    // least T" to a verifier without saying which address they are (see circuits/credit_threshold).
+    // Leaf = H(H(address, score), commitment) where commitment = H(secret) is set once by the
+    // address itself. Defaults on private loans are charged to a nullifier derived from the secret,
+    // so they accumulate against the identity without ever linking it back to the address.
+    //
+    // ponytail: the whole tree lives in storage and every score change rewrites one path (16
+    // Poseidon calls, ~450k gas). Fine at hackathon scale; move to LeanIMT with caller-supplied
+    // siblings if writes ever need to be cheap.
+    uint8 public constant TREE_DEPTH = 16;
+    uint8 public constant ROOT_HISTORY = 32;
+    uint256 internal constant FIELD_PRIME = 21888242871839275222246405745257275088548364400416034343698204186575808495617;
+
+    IPoseidonT3 public immutable POSEIDON;
+    uint256[16] internal _zeros;
+    mapping(uint8 => mapping(uint256 => uint256)) internal _nodes;
+    mapping(address => uint32) internal _leafSlot; // index + 1, so 0 means "no leaf yet"
+    uint32 public leafCount;
+    uint256 public root;
+    uint256[32] internal _roots;
+    uint8 internal _rootCursor;
+    mapping(address => uint256) public commitmentOf;
+    mapping(uint256 => uint32) public nullifierDefaults;
+
     address public owner;
     mapping(address => bool) public reporters;
     mapping(address => Profile) private _profiles;
@@ -47,8 +75,14 @@ contract CreditRegistry {
     event LiquidationRecorded(address indexed user, uint16 protocolId, uint64 sourceBlock, uint16 newScore);
     event DefaultRecorded(address indexed user, uint16 newScore);
     event OwnershipTransferred(address indexed from, address indexed to);
+    event CommitmentSet(address indexed user, uint256 commitment);
+    event LeafUpdated(address indexed user, uint32 index, uint256 leaf, uint256 root);
+    event NullifierDefaultRecorded(uint256 indexed nullifier, uint32 defaults);
 
     error NotOwner();
+    error NotKnown();
+    error InvalidFieldElement();
+    error TreeFull();
     error NotReporter();
     error ZeroAddress();
     error ProtocolIdTooLarge(uint16 protocolId);
@@ -63,9 +97,20 @@ contract CreditRegistry {
         _;
     }
 
-    constructor() {
+    constructor(IPoseidonT3 poseidon_) {
+        if (address(poseidon_) == address(0)) revert ZeroAddress();
+        POSEIDON = poseidon_;
         owner = msg.sender;
         emit OwnershipTransferred(address(0), msg.sender);
+
+        // Empty-subtree hashes, level by level. An unset storage slot reads as 0, which is exactly
+        // the empty leaf, so `_nodes` never has to be initialised.
+        uint256 zero = 0;
+        for (uint8 level = 0; level < TREE_DEPTH; level++) {
+            _zeros[level] = zero;
+            zero = POSEIDON.hash([zero, zero]);
+        }
+        _pushRoot(zero);
     }
 
     function transferOwnership(address to) external onlyOwner {
@@ -94,12 +139,14 @@ contract CreditRegistry {
         if (p.lastCountedBlock != 0 && sourceBlock <= p.lastCountedBlock + MIN_BLOCK_GAP) {
             // Also covers out-of-order arrivals: an older proof never rewrites newer state.
             emit RepaymentSkipped(user, sourceBlock, "too close to last counted repayment");
+            _refreshLeaf(user);
             return;
         }
 
         p.repayments += 1;
         p.lastCountedBlock = sourceBlock;
         emit RepaymentRecorded(user, protocolId, sourceBlock, scoreOf(user));
+        _refreshLeaf(user);
     }
 
     /// @notice Record a borrow proved on the source chain. Tracked for context; does not move the score.
@@ -108,6 +155,7 @@ contract CreditRegistry {
         _touch(p, protocolId, sourceBlock);
         p.borrows += 1;
         emit BorrowRecorded(user, protocolId, sourceBlock);
+        _refreshLeaf(user);
     }
 
     /// @notice Record a liquidation proved on the source chain.
@@ -117,6 +165,7 @@ contract CreditRegistry {
         _touch(p, protocolId, sourceBlock);
         p.liquidations += 1;
         emit LiquidationRecorded(user, protocolId, sourceBlock, scoreOf(user));
+        _refreshLeaf(user);
     }
 
     /// @notice Record a default on a Creditcoin-side credit line.
@@ -124,6 +173,91 @@ contract CreditRegistry {
         Profile storage p = _profiles[user];
         p.defaults += 1;
         emit DefaultRecorded(user, scoreOf(user));
+        _refreshLeaf(user);
+    }
+
+    /// @notice Record a default on a private loan against the borrower's nullifier. The circuit
+    ///         subtracts PENALTY_DEFAULT per recorded default before checking the threshold.
+    function recordDefaultByNullifier(uint256 nullifier) external onlyReporter {
+        uint32 defaults = ++nullifierDefaults[nullifier];
+        emit NullifierDefaultRecorded(nullifier, defaults);
+    }
+
+    // --------------------------------------------------------- private credit
+
+    /// @notice Bind a ZK commitment H(secret) to the caller's profile. Only the address itself can
+    ///         do this, which is what ties the secret to the history without a signature in-circuit.
+    function setCommitment(uint256 commitment) external {
+        if (!isKnown(msg.sender)) revert NotKnown();
+        if (commitment == 0 || commitment >= FIELD_PRIME) revert InvalidFieldElement();
+        commitmentOf[msg.sender] = commitment;
+        emit CommitmentSet(msg.sender, commitment);
+        _refreshLeaf(msg.sender);
+    }
+
+    /// @notice True for the current root and the previous ROOT_HISTORY-1, so a proof built a
+    ///         moment before someone else's update still verifies.
+    function isKnownRoot(uint256 candidate) public view returns (bool) {
+        if (candidate == 0) return false;
+        for (uint8 i = 0; i < ROOT_HISTORY; i++) {
+            if (_roots[i] == candidate) return true;
+        }
+        return false;
+    }
+
+    /// @notice The leaf currently stored for `user`, or 0 if it has none.
+    function leafOf(address user) external view returns (uint256) {
+        uint32 slot = _leafSlot[user];
+        return slot == 0 ? 0 : _nodes[0][slot - 1];
+    }
+
+    /// @notice Everything the prover needs: the sibling on each level, the leaf index, and the root
+    ///         those siblings hash up to. Read straight from storage, so no client-side tree.
+    function merklePath(address user)
+        external
+        view
+        returns (uint256[16] memory siblings, uint32 index, uint256 currentRoot)
+    {
+        uint32 slot = _leafSlot[user];
+        if (slot == 0) revert NotKnown();
+        index = slot - 1;
+        uint256 idx = index;
+        for (uint8 level = 0; level < TREE_DEPTH; level++) {
+            uint256 sibling = _nodes[level][idx ^ 1];
+            siblings[level] = sibling == 0 ? _zeros[level] : sibling;
+            idx >>= 1;
+        }
+        currentRoot = root;
+    }
+
+    function _refreshLeaf(address user) private {
+        uint32 slot = _leafSlot[user];
+        if (slot == 0) {
+            if (leafCount >= uint32(1) << TREE_DEPTH) revert TreeFull();
+            slot = ++leafCount;
+            _leafSlot[user] = slot;
+        }
+        uint32 index = slot - 1;
+
+        uint256 leaf = POSEIDON.hash([POSEIDON.hash([uint256(uint160(user)), uint256(scoreOf(user))]), commitmentOf[user]]);
+
+        uint256 idx = index;
+        uint256 node = leaf;
+        for (uint8 level = 0; level < TREE_DEPTH; level++) {
+            _nodes[level][idx] = node;
+            uint256 sibling = _nodes[level][idx ^ 1];
+            if (sibling == 0) sibling = _zeros[level];
+            node = idx & 1 == 0 ? POSEIDON.hash([node, sibling]) : POSEIDON.hash([sibling, node]);
+            idx >>= 1;
+        }
+        _pushRoot(node);
+        emit LeafUpdated(user, index, leaf, node);
+    }
+
+    function _pushRoot(uint256 newRoot) private {
+        root = newRoot;
+        _roots[_rootCursor] = newRoot;
+        _rootCursor = (_rootCursor + 1) % ROOT_HISTORY;
     }
 
     function _touch(Profile storage p, uint16 protocolId, uint64 sourceBlock) private {

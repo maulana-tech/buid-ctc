@@ -47,6 +47,11 @@ export default function BorrowPage() {
     const locked = snapshot.score < snapshot.minScore
     const repaymentsNeeded = Math.ceil((snapshot.minScore - snapshot.score) / SCORE.perRepayment)
     const blocksLeft = snapshot.loan.active && head !== null ? snapshot.loan.dueBlock - head : null
+    // Interest accrues per block, so the amount owed when the transaction lands is a hair above
+    // what the page read. The contract only ever takes min(amount, owed), so "Max" sends a little
+    // more than owed and the loan actually closes instead of leaving a few units open.
+    const owedWithMargin = snapshot.owed + snapshot.owed / 1000n + 1n
+    const repayMax = owedWithMargin < snapshot.asset.balance ? owedWithMargin : snapshot.asset.balance
 
     return (
         <div className="grid gap-6 lg:grid-cols-5">
@@ -133,6 +138,9 @@ export default function BorrowPage() {
                     <div className="mt-4 flex items-baseline gap-2">
                         <span className="text-4xl font-semibold tracking-tight tabular-nums">{formatAmount(snapshot.owed, decimals)}</span>
                         <span className="text-muted-foreground">{symbol} owed</span>
+                        {snapshot.loan.active && snapshot.loan.private && (
+                            <span className="bg-muted ml-auto rounded-full px-2 py-0.5 text-xs">private</span>
+                        )}
                     </div>
                     <div className="text-muted-foreground mt-1 text-sm">
                         {snapshot.loan.active
@@ -185,7 +193,7 @@ export default function BorrowPage() {
                                     key="repay"
                                     method="repay"
                                     label="Repay"
-                                    max={snapshot.owed < snapshot.asset.balance ? snapshot.owed : snapshot.asset.balance}
+                                    max={repayMax}
                                     disabled={!owns || !snapshot.loan.active}
                                     disabledReason={snapshot.loan.active ? 'Connect a wallet to repay.' : 'No open loan.'}
                                     hint="Repaying in full on time adds to your score. Interest is settled at repayment."
@@ -202,7 +210,7 @@ export default function BorrowPage() {
                                             />
                                             <Row
                                                 label="Wallet after"
-                                                value={`${formatAmount(snapshot.asset.balance - value, decimals)} ${symbol}`}
+                                                value={`${formatAmount(snapshot.asset.balance - (value < snapshot.owed ? value : snapshot.owed), decimals)} ${symbol}`}
                                             />
                                         </>
                                     )}

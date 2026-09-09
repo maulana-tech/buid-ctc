@@ -13,7 +13,9 @@
     "check:attestation": "tsx worker/check-attestation.ts",
     "make:fixtures": "tsx script/make-fixtures.ts",
     "check:abi": "tsx script/check-abi.ts",
-    "verify": "npm run check:abi && forge build && forge test",
+    "verify": "npm run check:abi && forge build && FOUNDRY_PROFILE=zk forge build && forge test",
+    "zk:build": "cd circuits/credit_threshold && nargo compile && bb write_vk -b target/credit_threshold.json -o target --oracle_hash keccak && bb write_solidity_verifier -k target/vk -o ../../contracts/zk/HonkVerifier.sol --zk && cp target/credit_threshold.json ../../web/src/lib/zk/credit_threshold.json",
+    "zk:fixture": "tsx script/make-zk-fixture.ts",
     "local": "tsx script/local.ts",
     "anvil": "anvil --chain-id 102031",
     "deploy:testnet": "tsx script/deploy-testnet.ts",
@@ -29,6 +31,8 @@
   "devDependencies": {
     "@types/node": "26.1.0",
     "forge-std": "^1.1.2",
+    "poseidon-lite": "^0.3.0",
+    "poseidon-solidity": "^0.0.5",
     "tsx": "^4.22.4",
     "typescript": "^5.9.0"
   }

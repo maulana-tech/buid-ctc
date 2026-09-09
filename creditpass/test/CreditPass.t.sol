@@ -6,6 +6,7 @@ import {EvmV1Decoder} from "@gluwa/asc-contracts/contracts/common/EvmV1Decoder.s
 import {INativeQueryVerifier} from "@gluwa/asc-contracts/contracts/write-ability/common/INativeQueryVerifier.sol";
 
 import {CreditRegistry} from "../contracts/CreditRegistry.sol";
+import {Zk} from "./harness/Zk.sol";
 import {CreditLine} from "../contracts/CreditLine.sol";
 import {LendingHistoryASC} from "../contracts/LendingHistoryASC.sol";
 import {LendingHistoryASCHarness} from "./harness/LendingHistoryASCHarness.sol";
@@ -39,7 +40,7 @@ contract CreditPassTest is Test {
     uint256 internal constant SEED = 500_000e6;
 
     function setUp() public {
-        registry = new CreditRegistry();
+        registry = new CreditRegistry(Zk.deployPoseidon());
         asc = new LendingHistoryASCHarness(registry);
 
         asc.registerSource(AAVE, "Aave V3", AAVE_POOL, CHAIN_KEY);
@@ -48,7 +49,7 @@ contract CreditPassTest is Test {
         asc.setEventSpec(MORPHO_ID, LendingHistoryASC.Action.Repay, MORPHO_REPAY_SIG, 3);
 
         token = new MockERC20();
-        line = new CreditLine(token, registry, LIMIT_UNIT);
+        line = new CreditLine(token, registry, Zk.deployVerifier(), LIMIT_UNIT);
 
         registry.setReporter(reporter, true);
         registry.setReporter(address(line), true);

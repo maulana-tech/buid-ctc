@@ -9,6 +9,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {CreditRegistry} from "./CreditRegistry.sol";
+import {IHonkVerifier} from "./zk/IHonkVerifier.sol";
 
 /// @title CreditLine
 /// @notice An ERC4626 vault that lends without collateral. Depositors supply the asset and earn the
@@ -36,6 +37,8 @@ contract CreditLine is ERC4626 {
     uint16 public constant MIN_SCORE = 500;
 
     CreditRegistry public immutable REGISTRY;
+    /// @notice UltraHonk verifier for circuits/credit_threshold — the private borrow path.
+    IHonkVerifier public immutable VERIFIER;
 
     address public admin;
 
@@ -55,10 +58,16 @@ contract CreditLine is ERC4626 {
 
     mapping(address => Loan) public loans;
 
+    /// @notice For a loan drawn with a ZK proof: the nullifier it is charged to. 0 for public loans.
+    mapping(address => uint256) public privateNullifier;
+    /// @notice One open loan per identity, whichever wallet drew it.
+    mapping(uint256 => bool) public nullifierHasLoan;
+
     event LimitUnitSet(uint256 limitUnit);
     event Borrowed(address indexed borrower, uint256 amount, uint16 score, uint64 dueBlock);
     event Repaid(address indexed borrower, uint256 amount, bool closed);
     event Defaulted(address indexed borrower, uint256 shortfall);
+    event BorrowedPrivately(address indexed borrower, uint256 indexed nullifier, uint16 threshold, uint256 amount);
     event AdminTransferred(address indexed from, address indexed to);
 
     error NotAdmin();
@@ -72,18 +81,22 @@ contract CreditLine is ERC4626 {
     error InsufficientLiquidity(uint256 requested, uint256 available);
     error NotYetDue(uint64 nowBlock, uint64 dueBlock);
     error LoanFullyRepaid();
+    error UnknownRoot(uint256 root);
+    error NullifierBusy(uint256 nullifier);
+    error InvalidProof();
 
     modifier onlyAdmin() {
         if (msg.sender != admin) revert NotAdmin();
         _;
     }
 
-    constructor(IERC20 asset_, CreditRegistry registry_, uint256 limitUnit_)
+    constructor(IERC20 asset_, CreditRegistry registry_, IHonkVerifier verifier_, uint256 limitUnit_)
         ERC20("CreditPass Vault Share", "cpUSD")
         ERC4626(asset_)
     {
-        if (address(registry_) == address(0)) revert ZeroAddress();
+        if (address(registry_) == address(0) || address(verifier_) == address(0)) revert ZeroAddress();
         REGISTRY = registry_;
+        VERIFIER = verifier_;
         limitUnit = limitUnit_;
         admin = msg.sender;
         emit AdminTransferred(address(0), msg.sender);
@@ -142,7 +155,11 @@ contract CreditLine is ERC4626 {
     /// @notice How much `user` may borrow, derived purely from attested history.
     function creditLimit(address user) public view returns (uint256) {
         if (!REGISTRY.isKnown(user)) return 0;
-        uint16 score = REGISTRY.scoreOf(user);
+        return limitForScore(REGISTRY.scoreOf(user));
+    }
+
+    /// @notice The tier table. Public so a private borrower can see what a threshold is worth.
+    function limitForScore(uint16 score) public view returns (uint256) {
         if (score < MIN_SCORE) return 0;
         if (score < 600) return limitUnit;
         if (score < 700) return limitUnit * 2;
@@ -190,6 +207,60 @@ contract CreditLine is ERC4626 {
         emit Borrowed(msg.sender, amount, score, dueBlock);
     }
 
+    /// @notice Borrow from any wallet by proving, in zero knowledge, that some registry profile
+    ///         scores at least `threshold` after the defaults already charged to `nullifier`.
+    /// @dev    The public inputs are exactly the circuit's: root, threshold, nullifier defaults,
+    ///         nullifier. The contract supplies the defaults count itself so the prover cannot
+    ///         understate it, and accepts any recent root so a proof is not invalidated by an
+    ///         unrelated update that landed in the meantime. The limit is the tier the threshold
+    ///         falls in — prove a lower band than you hold and you borrow less, which is the point
+    ///         of selective disclosure.
+    function borrowPrivate(uint256 amount, uint16 threshold, uint256 root, uint256 nullifier, bytes calldata proof) external {
+        if (amount == 0) revert ZeroAmount();
+        if (loans[msg.sender].active) revert LoanAlreadyOpen();
+        if (nullifierHasLoan[nullifier]) revert NullifierBusy(nullifier);
+        if (threshold < MIN_SCORE) revert ScoreTooLow(threshold, MIN_SCORE);
+        if (!REGISTRY.isKnownRoot(root)) revert UnknownRoot(root);
+
+        uint32 defaults = REGISTRY.nullifierDefaults(nullifier);
+        if (defaults > type(uint8).max) revert ScoreTooLow(0, threshold);
+
+        bytes32[] memory inputs = new bytes32[](4);
+        inputs[0] = bytes32(root);
+        inputs[1] = bytes32(uint256(threshold));
+        inputs[2] = bytes32(uint256(defaults));
+        inputs[3] = bytes32(nullifier);
+        // The Honk verifier reverts with its own errors on a malformed or mismatched proof rather
+        // than returning false; either way the answer here is the same.
+        try VERIFIER.verify(proof, inputs) returns (bool ok) {
+            if (!ok) revert InvalidProof();
+        } catch {
+            revert InvalidProof();
+        }
+
+        uint256 limit = limitForScore(threshold);
+        if (amount > limit) revert ExceedsCreditLimit(amount, limit);
+
+        uint256 liquidity = availableLiquidity();
+        if (amount > liquidity) revert InsufficientLiquidity(amount, liquidity);
+
+        uint64 dueBlock = uint64(block.number) + TERM_BLOCKS;
+        loans[msg.sender] = Loan({
+            principal: uint128(amount),
+            repaid: 0,
+            startBlock: uint64(block.number),
+            dueBlock: dueBlock,
+            active: true
+        });
+        privateNullifier[msg.sender] = nullifier;
+        nullifierHasLoan[nullifier] = true;
+        totalPrincipal += amount;
+
+        IERC20(asset()).safeTransfer(msg.sender, amount);
+        emit Borrowed(msg.sender, amount, threshold, dueBlock);
+        emit BorrowedPrivately(msg.sender, nullifier, threshold, amount);
+    }
+
     function repay(uint256 amount) external {
         if (amount == 0) revert ZeroAmount();
         Loan storage loan = loans[msg.sender];
@@ -207,6 +278,7 @@ contract CreditLine is ERC4626 {
         if (closed) {
             totalPrincipal -= loan.principal;
             loan.active = false;
+            _releaseNullifier(msg.sender);
         }
         emit Repaid(msg.sender, pay, closed);
     }
@@ -223,7 +295,21 @@ contract CreditLine is ERC4626 {
         totalPrincipal -= loan.principal;
         loan.active = false;
 
-        REGISTRY.recordDefault(borrower);
+        uint256 nullifier = privateNullifier[borrower];
+        if (nullifier != 0) {
+            // The wallet is a throwaway; the identity behind the proof is what carries the mark.
+            REGISTRY.recordDefaultByNullifier(nullifier);
+            _releaseNullifier(borrower);
+        } else {
+            REGISTRY.recordDefault(borrower);
+        }
         emit Defaulted(borrower, shortfall);
+    }
+
+    function _releaseNullifier(address borrower) private {
+        uint256 nullifier = privateNullifier[borrower];
+        if (nullifier == 0) return;
+        nullifierHasLoan[nullifier] = false;
+        privateNullifier[borrower] = 0;
     }
 }

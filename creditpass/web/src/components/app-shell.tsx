@@ -26,6 +26,7 @@ const TABS = [
     { href: '/app/portfolio', label: 'Portfolio' },
     { href: '/app/history', label: 'History' },
     { href: '/app/borrow', label: 'Borrow' },
+    { href: '/app/private', label: 'Private' },
     { href: '/app/earn', label: 'Earn' },
     { href: '/app/withdraw', label: 'Withdraw' },
     { href: '/app/swap', label: 'Swap' },
