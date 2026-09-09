@@ -10,7 +10,6 @@ import {
     Banknote,
     Coins,
     HandCoins,
-    Loader2,
     ShieldAlert,
     Tag,
     Undo2,
@@ -18,7 +17,7 @@ import {
     XCircle,
 } from 'lucide-react'
 
-import { Loading, Notice, Row, Stat, useApp } from '@/components/app-shell'
+import { ConnectPrompt, Loading, Notice, Row, useApp } from '@/components/app-shell'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import {
@@ -27,14 +26,12 @@ import {
     formatPercent,
     loadMarket,
     loadPortfolio,
-    loadSnapshot,
     loadVaultPosition,
     shorten,
     tierOf,
     type Activity,
     type Market,
     type Portfolio,
-    type Snapshot,
     type VaultPosition,
 } from '@/lib/creditpass'
 
@@ -64,8 +61,7 @@ function blocksToText(blocks: number) {
  * numbers only mean something next to the buttons that move them. Passport is for looking others up.
  */
 export default function PortfolioPage() {
-    const { wallet, snapshot: shellSnapshot } = useApp()
-    const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
+    const { wallet, snapshot } = useApp()
     const [position, setPosition] = useState<VaultPosition | null>(null)
     const [market, setMarket] = useState<Market | null>(null)
     const [portfolio, setPortfolio] = useState<Portfolio | null>(null)
@@ -74,9 +70,8 @@ export default function PortfolioPage() {
     useEffect(() => {
         if (!wallet) return
         setError(null)
-        Promise.all([loadSnapshot(wallet), loadVaultPosition(wallet), loadMarket(wallet), loadPortfolio(wallet)])
-            .then(([s, p, m, pf]) => {
-                setSnapshot(s)
+        Promise.all([loadVaultPosition(wallet), loadMarket(wallet), loadPortfolio(wallet)])
+            .then(([p, m, pf]) => {
                 setPosition(p)
                 setMarket(m)
                 setPortfolio(pf)
@@ -84,7 +79,13 @@ export default function PortfolioPage() {
             .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
     }, [wallet])
 
-    if (!wallet) return <ConnectPrompt demo={Boolean(shellSnapshot?.demo)} />
+    if (!wallet) {
+        return (
+            <ConnectPrompt title="Your portfolio is wallet-scoped.">
+                It shows what the connected wallet holds and owes across the registry, the vault and the market — and what needs attention.
+            </ConnectPrompt>
+        )
+    }
     if (error) return <Notice tone="warn">{error}</Notice>
     if (!snapshot || !position || !market || !portfolio) return <Loading what="your portfolio" />
 
@@ -110,9 +111,9 @@ export default function PortfolioPage() {
     else if (dueSoon)
         attention.push({ tone: 'warn', text: `Your loan is due in about ${blocksToText(blocksLeft)}. ${formatAmount(snapshot.owed, decimals)} ${symbol} owed with interest.`, href: '/app/borrow', cta: 'Repay' })
     if (snapshot.known && snapshot.score < snapshot.minScore)
-        attention.push({ tone: 'info', text: `Score ${snapshot.score} — the credit line opens at ${snapshot.minScore}. Prove more time-separated repayments to get there.`, href: '/app', cta: 'See passport' })
+        attention.push({ tone: 'info', text: `Score ${snapshot.score} — the credit line opens at ${snapshot.minScore}. Prove more time-separated repayments to get there.`, href: '/app/history', cta: 'Prove more' })
     if (!snapshot.known)
-        attention.push({ tone: 'info', text: 'No attested history yet for this wallet. Prove a repayment on Aave, Spark or Morpho to get a score.', href: '/app', cta: 'How' })
+        attention.push({ tone: 'info', text: 'No attested history yet for this wallet. Prove a repayment on Aave, Spark or Morpho to get a score.', href: '/app/history', cta: 'Prove' })
     if (locked > 0n)
         attention.push({ tone: 'info', text: `${formatAmount(locked, decimals)} ${symbol} of your vault position is out on loan and cannot be withdrawn yet. You can sell it instead.`, href: '/app/swap', cta: 'Sell shares' })
     if (offersAboveNav.length > 0)
@@ -352,27 +353,5 @@ function CardLink({ href, label }: { href: string; label: string }) {
             className="text-muted-foreground hover:text-foreground mt-auto flex items-center gap-1 border-t pt-3 text-sm">
             {label} <ArrowUpRight className="size-3.5" />
         </Link>
-    )
-}
-
-function ConnectPrompt({ demo }: { demo: boolean }) {
-    return (
-        <Card className="p-10 text-center">
-            <Wallet className="text-muted-foreground mx-auto size-8" />
-            <p className="mt-4 text-lg font-medium">Your portfolio is wallet-scoped.</p>
-            <p className="text-muted-foreground mx-auto mt-2 max-w-md text-balance text-sm">
-                It shows what the connected wallet holds and owes across the registry, the vault and the market — and what needs attention. Connect a
-                wallet to see yours, or look up any address&apos;s public passport instead.
-            </p>
-            <div className="mt-6 flex justify-center gap-3">
-                <Button
-                    size="sm"
-                    variant="outline"
-                    nativeButton={false}
-                    render={<Link href="/app">Look up a passport</Link>}
-                />
-            </div>
-            {demo && <p className="text-muted-foreground mt-4 text-xs">Demo build — connect any wallet to see the demo portfolio.</p>}
-        </Card>
     )
 }

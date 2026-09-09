@@ -3,13 +3,13 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
-import { BrowserProvider, Contract, formatUnits, isAddress, parseUnits } from 'ethers'
-import { ArrowLeft, Droplet, Loader2, Search, TriangleAlert, Wallet } from 'lucide-react'
+import { BrowserProvider, Contract, ZeroAddress, formatUnits, parseUnits } from 'ethers'
+import { ArrowLeft, Droplet, Loader2, TriangleAlert, Wallet } from 'lucide-react'
 
 import { Logo } from '@/components/logo'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Card } from '@/components/ui/card'
 import { ADDRESSES, ERC20_ABI, LINE_ABI, formatAmount, isConfigured, loadSnapshot, shorten, type Snapshot } from '@/lib/creditpass'
 import {
     CREDITCOIN_TESTNET,
@@ -24,7 +24,7 @@ import {
 const TABS = [
     { href: '/app', label: 'Passport' },
     { href: '/app/portfolio', label: 'Portfolio' },
-    { href: '/app/directory', label: 'Directory' },
+    { href: '/app/history', label: 'History' },
     { href: '/app/borrow', label: 'Borrow' },
     { href: '/app/earn', label: 'Earn' },
     { href: '/app/withdraw', label: 'Withdraw' },
@@ -32,15 +32,18 @@ const TABS = [
 ]
 
 type AppState = {
+    /** The connected wallet, or the zero address so vault-level reads still work before connecting. */
     address: string
     wallet: string | null
     provider: Eip1193Provider | null
     onCreditcoin: boolean
+    /** True once a wallet is connected — every page acts on the connected wallet, never a typed address. */
     owns: boolean
     snapshot: Snapshot | null
     loading: boolean
     error: string | null
     refresh: () => void
+    connect: () => void
 }
 
 const AppContext = createContext<AppState | null>(null)
@@ -53,14 +56,6 @@ export function useApp() {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
     const pathname = usePathname()
-    const [query, setQuery] = useState(() => {
-        if (typeof window !== 'undefined') {
-            const requested = new URLSearchParams(window.location.search).get('address')
-            if (requested && isAddress(requested)) return requested
-        }
-        return ''
-    })
-    const [address, setAddress] = useState(query)
     const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
@@ -81,11 +76,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         })
     }, [])
 
+    // Follow account and chain switches made inside the wallet.
+    useEffect(() => {
+        if (!provider?.on) return
+        const onAccounts = (accounts: unknown) => setAccount((accounts as string[])[0] ?? null)
+        const onChain = (id: unknown) => setChainId(String(id))
+        provider.on('accountsChanged', onAccounts)
+        provider.on('chainChanged', onChain)
+        return () => {
+            provider.removeListener?.('accountsChanged', onAccounts)
+            provider.removeListener?.('chainChanged', onChain)
+        }
+    }, [provider])
+
+    const address = account ?? ZeroAddress
+
     const load = useCallback(async (target: string) => {
         setLoading(true)
-        setError(null)
         try {
             setSnapshot(await loadSnapshot(target))
+            setError(null)
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e))
             setSnapshot(null)
@@ -116,37 +126,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         }
     }, [address])
 
-    const lookup = () => {
-        if (!isAddress(query)) {
-            setError('That is not a valid address.')
-            return
-        }
-        setAddress(query)
-    }
-
-    const connect = async (chosen: DiscoveredWallet) => {
+    const connectTo = async (chosen: DiscoveredWallet) => {
         setPicking(false)
         setError(null)
         try {
             const accounts = (await chosen.provider.request({ method: 'eth_requestAccounts' })) as string[]
             await ensureCreditcoinNetwork(chosen.provider)
-
             setProvider(chosen.provider)
             setAccount(accounts[0])
             setChainId(await currentChainId(chosen.provider))
-            setQuery(accounts[0])
-            setAddress(accounts[0])
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e))
         }
     }
 
-    const onConnectClick = () => {
+    const connect = () => {
         if (wallets.length === 0) {
-            setError('No wallet detected. Paste an address instead — every score is public and readable without one.')
+            setError('No wallet detected. Install a browser wallet such as MetaMask, then reload.')
             return
         }
-        if (wallets.length === 1) return void connect(wallets[0])
+        if (wallets.length === 1) return void connectTo(wallets[0])
         setPicking((open) => !open)
     }
 
@@ -155,11 +154,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         wallet: account,
         provider,
         onCreditcoin: chainId ? isCreditcoin(chainId) : false,
-        owns: account?.toLowerCase() === address.toLowerCase(),
+        owns: Boolean(account),
         snapshot,
         loading,
         error,
         refresh: () => void load(address),
+        connect,
     }
 
     return (
@@ -175,12 +175,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                         <div className="relative flex items-center gap-3">
                             <ThemeToggle />
                             {account ? (
-                                <span className="bg-muted rounded-full px-3 py-1.5 font-mono text-xs">{shorten(account)}</span>
+                                <span className="bg-muted flex items-center gap-2 rounded-full px-3 py-1.5 font-mono text-xs">
+                                    <span className={`size-1.5 rounded-full ${chainId && isCreditcoin(chainId) ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                                    {shorten(account)}
+                                </span>
                             ) : (
                                 <Button
                                     size="sm"
-                                    variant="outline"
-                                    onClick={onConnectClick}>
+                                    onClick={connect}>
                                     <Wallet /> Connect wallet
                                 </Button>
                             )}
@@ -191,7 +193,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                                         <button
                                             key={w.uuid}
                                             type="button"
-                                            onClick={() => connect(w)}
+                                            onClick={() => connectTo(w)}
                                             className="hover:bg-muted flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm">
                                             {w.icon ? (
                                                 // eslint-disable-next-line @next/next/no-img-element
@@ -241,37 +243,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 </header>
 
                 <main className="mx-auto max-w-7xl space-y-6 px-6 py-10">
-                    <div className="flex flex-wrap items-center gap-2">
-                        <div className="relative min-w-64 flex-1">
-                            <Search className="text-muted-foreground pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2" />
-                            <Input
-                                value={query}
-                                spellCheck={false}
-                                onChange={(event) => setQuery(event.target.value)}
-                                onKeyDown={(event) => event.key === 'Enter' && lookup()}
-                                placeholder="0x…"
-                                className="h-10 pl-9 font-mono"
-                            />
-                        </div>
-                        <Button
-                            size="sm"
-                            className="h-10"
-                            onClick={lookup}>
-                            Look up
-                        </Button>
-                        <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-10"
-                            onClick={() => {
-                                const addr = '0x7a3f4d1c2b9e8a5f6c0d3e2b1a9f8c7d6e5b4a30'
-                                setQuery(addr)
-                                setAddress(addr)
-                            }}>
-                            Fill demo
-                        </Button>
-                    </div>
-
                     {!isConfigured && <Notice>Contracts are not deployed yet. Everything below is a labelled demo, not chain data.</Notice>}
                     {account && chainId && !isCreditcoin(chainId) && (
                         <Notice tone="warn">
@@ -285,6 +256,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 </main>
             </div>
         </AppContext.Provider>
+    )
+}
+
+/** Full-width prompt for pages that mean nothing without a wallet. */
+export function ConnectPrompt({ title, children }: { title: string; children: React.ReactNode }) {
+    const { connect, snapshot } = useApp()
+    return (
+        <Card className="p-10 text-center">
+            <Wallet className="text-muted-foreground mx-auto size-8" />
+            <p className="mt-4 text-lg font-medium">{title}</p>
+            <p className="text-muted-foreground mx-auto mt-2 max-w-md text-balance text-sm">{children}</p>
+            <div className="mt-6 flex justify-center">
+                <Button
+                    size="sm"
+                    onClick={connect}>
+                    <Wallet /> Connect wallet
+                </Button>
+            </div>
+            {snapshot?.demo && <p className="text-muted-foreground mt-4 text-xs">Demo build — any wallet shows the demo data.</p>}
+        </Card>
     )
 }
 

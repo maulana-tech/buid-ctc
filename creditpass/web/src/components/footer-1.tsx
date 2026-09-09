@@ -8,7 +8,7 @@ const footerLinks = [
         name: 'Product',
         links: [
             { href: '/app', label: 'Passport' },
-            { href: '/app/directory', label: 'Directory' },
+            { href: '/app/history', label: 'History' },
             { href: '/app/borrow', label: 'Borrow' },
             { href: '/app/earn', label: 'Earn' },
             { href: '/app/swap', label: 'Share market' },

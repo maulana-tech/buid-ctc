@@ -1,4 +1,4 @@
-import { Contract, JsonRpcProvider, formatUnits, isAddress } from 'ethers'
+import { Contract, JsonRpcProvider, ZeroAddress, formatUnits, isAddress } from 'ethers'
 
 export const RPC_URL = process.env.NEXT_PUBLIC_CREDITCOIN_RPC_URL ?? 'https://rpc.cc3-testnet.creditcoin.network'
 export const EXPLORER = process.env.NEXT_PUBLIC_CREDITCOIN_EXPLORER ?? 'https://creditcoin-testnet.blockscout.com'
@@ -62,6 +62,7 @@ export const REGISTRY_ABI = [
     'function protocolCount(address) view returns (uint8)',
     'function profileOf(address) view returns (tuple(uint32 repayments, uint32 borrows, uint32 liquidations, uint32 defaults, uint64 firstSeenBlock, uint64 lastCountedBlock, uint32 protocols))',
     'event RepaymentRecorded(address indexed user, uint16 protocolId, uint64 sourceBlock, uint16 newScore)',
+    'event RepaymentSkipped(address indexed user, uint64 sourceBlock, string reason)',
     'event LiquidationRecorded(address indexed user, uint16 protocolId, uint64 sourceBlock, uint16 newScore)',
 ]
 
@@ -109,6 +110,7 @@ export const MARKET_ABI = [
 
 export const ASC_ABI = [
     'event HistoryProved(address indexed user, uint16 protocolId, uint8 action, uint64 sourceBlock, bytes32 queryId)',
+    'function submit(uint16 protocolId, uint8 action, uint64 chainKey, uint64 blockHeight, bytes encodedTransaction, bytes32 merkleRoot, tuple(bytes32 hash, bool isLeft)[] siblings, bytes32 lowerEndpointDigest, bytes32[] continuityRoots)',
 ]
 
 export const ERC20_ABI = [
@@ -207,6 +209,47 @@ async function queryLogsChunked(contract: Contract, filter: unknown, rpc: JsonRp
 }
 
 /** Score bands mirror CreditLine.creditLimit — keep the two in step. */
+/** Mirrors CreditRegistry's constants. The breakdown below must add up to what scoreOf() returns. */
+export const SCORE = {
+    base: 300,
+    max: 1000,
+    perRepayment: 25,
+    maxCountedRepayments: 20,
+    perAgeStep: 10,
+    maxAgeBonus: 100,
+    minBlockGap: 7200,
+    blocksPerAgeStep: 7200 * 30,
+    liquidation: 150,
+    default: 300,
+} as const
+
+/** Score bands as CreditLine tiers them; `from` is the score that opens each band. */
+export const BANDS = [
+    { from: 0, label: 'No credit line', multiplier: 0 },
+    { from: 500, label: 'Thin file', multiplier: 1 },
+    { from: 600, label: 'Established', multiplier: 2 },
+    { from: 700, label: 'Strong', multiplier: 5 },
+    { from: 800, label: 'Prime', multiplier: 10 },
+] as const
+
+/**
+ * The registry's formula, component by component, so the passport can say *why* a score is what
+ * it is and what would move it. Kept in lockstep with CreditRegistry.scoreOf().
+ */
+export function scoreBreakdown(profile: Profile, known: boolean) {
+    if (!known) return { base: 0, repayments: 0, age: 0, liquidations: 0, defaults: 0, total: 0, counted: 0, ageSteps: 0 }
+    const counted = Math.min(profile.repayments, SCORE.maxCountedRepayments)
+    const ageSteps =
+        profile.lastCountedBlock > profile.firstSeenBlock ? Math.floor((profile.lastCountedBlock - profile.firstSeenBlock) / SCORE.blocksPerAgeStep) : 0
+    const age = Math.min(ageSteps * SCORE.perAgeStep, SCORE.maxAgeBonus)
+    const positive = SCORE.base + counted * SCORE.perRepayment + age
+    const liquidations = profile.liquidations * SCORE.liquidation
+    const defaults = profile.defaults * SCORE.default
+    const penalty = liquidations + defaults
+    const total = penalty >= positive ? 0 : Math.min(positive - penalty, SCORE.max)
+    return { base: SCORE.base, repayments: counted * SCORE.perRepayment, age, liquidations, defaults, total, counted, ageSteps }
+}
+
 export function tierOf(score: number, minScore: number) {
     if (score < minScore) return { label: 'No credit line', multiplier: 0 }
     if (score < 600) return { label: 'Thin file', multiplier: 1 }
@@ -835,6 +878,75 @@ const DEMO_MARKET: Market = {
     ],
 }
 
+/** What /api/proof returns: the detected event plus the Attestcoin proof, ready for ASC.submit(). */
+export type ProofPayload = {
+    txHash: string
+    protocolId: number
+    protocolName: string
+    action: number
+    actionName: string
+    borrower: string
+    chainKey: number
+    sourceBlock: number
+    txBytes: string
+    merkleRoot: string
+    siblings: { hash: string; isLeft: boolean }[]
+    lowerEndpointDigest: string
+    continuityRoots: string[]
+}
+
+export async function fetchProof(txHash: string): Promise<ProofPayload> {
+    const res = await fetch('/api/proof', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ txHash }) })
+    const body = (await res.json()) as ProofPayload & { error?: string }
+    if (!res.ok) throw new Error(body.error ?? `Proof service answered ${res.status}`)
+    return body
+}
+
+export type ProofOutcome = {
+    txHash: string
+    user: string
+    /** Null when the action was not a repayment (borrows and liquidations are never rate-limited). */
+    counted: boolean | null
+    skipReason?: string
+    scoreAfter: number | null
+}
+
+/**
+ * Submit a proof from the connected wallet and read back what the registry did with it.
+ * Gas estimation through pallet-evm sometimes fails on precompile calls even when the call would
+ * succeed, so a failed estimate falls back to a formula rather than aborting.
+ */
+export async function submitProof(signer: import('ethers').Signer, p: ProofPayload): Promise<ProofOutcome> {
+    const asc = new Contract(ADDRESSES.asc, ASC_ABI, signer)
+    const registry = new Contract(ADDRESSES.registry, REGISTRY_ABI, signer)
+    const args = [p.protocolId, p.action, p.chainKey, p.sourceBlock, p.txBytes, p.merkleRoot, p.siblings, p.lowerEndpointDigest, p.continuityRoots]
+
+    let gasLimit: bigint
+    try {
+        gasLimit = ((await asc.submit.estimateGas(...args)) * 135n) / 100n
+    } catch {
+        gasLimit = BigInt(400_000 + p.continuityRoots.length * 5_000)
+    }
+    const tx = await asc.submit(...args, { gasLimit })
+    const receipt = await tx.wait()
+
+    let user = p.borrower
+    let counted: boolean | null = p.action === 0 ? false : null
+    let skipReason: string | undefined
+    for (const log of receipt.logs as { topics: readonly string[]; data: string }[]) {
+        try {
+            const parsed = asc.interface.parseLog({ topics: [...log.topics], data: log.data }) ?? registry.interface.parseLog({ topics: [...log.topics], data: log.data })
+            if (parsed?.name === 'HistoryProved') user = parsed.args[0] as string
+            if (parsed?.name === 'RepaymentRecorded') counted = true
+            if (parsed?.name === 'RepaymentSkipped') skipReason = parsed.args[2] as string
+        } catch {
+            // Precompile logs are not ours to decode.
+        }
+    }
+    const scoreAfter = Number(await registry.scoreOf(user))
+    return { txHash: tx.hash, user, counted, skipReason, scoreAfter }
+}
+
 export type DirectoryEntry = {
     address: string
     score: number
@@ -965,7 +1077,8 @@ export async function loadSnapshot(address: string): Promise<Snapshot> {
 
     let history: HistoryEntry[] = []
     let historyError: string | undefined
-    if (ADDRESSES.asc) {
+    // The zero address stands in for "no wallet yet"; it has no history worth a log scan.
+    if (ADDRESSES.asc && address !== ZeroAddress) {
         try {
             const asc = new Contract(ADDRESSES.asc, ASC_ABI, rpc)
             const logs = await queryLogsChunked(asc, asc.filters.HistoryProved(address), rpc)

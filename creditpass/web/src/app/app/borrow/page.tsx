@@ -1,18 +1,42 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import Link from 'next/link'
 
-import { AmountAction, Faucet, Loading, ModeToggle, Row, Stat, useApp } from '@/components/app-shell'
+import { AmountAction, ConnectPrompt, Faucet, Loading, ModeToggle, Row, Stat, useApp } from '@/components/app-shell'
+import { ProveHistory } from '@/components/prove-history'
 import { Card } from '@/components/ui/card'
-import { formatAmount, formatPercent, tierOf } from '@/lib/creditpass'
+import { SCORE, formatAmount, formatPercent, provider, tierOf } from '@/lib/creditpass'
 
 /** Mirrors CreditLine: ~30-day term at ~15s blocks, simple interest per block. */
 const TERM_BLOCKS = 172_800n
 const BLOCKS_PER_YEAR = 2_102_400n
+const BLOCKS_PER_DAY = 5_760
+
+function dueText(blocks: number) {
+    if (blocks <= 0) return 'overdue'
+    const days = blocks / BLOCKS_PER_DAY
+    return days >= 1 ? `due in ~${Math.floor(days)}d` : `due in ~${Math.round(days * 24)}h`
+}
 
 export default function BorrowPage() {
     const { snapshot, owns, wallet } = useApp()
     const [mode, setMode] = useState<'borrow' | 'repay'>('borrow')
+    const [head, setHead] = useState<number | null>(null)
+    useEffect(() => {
+        provider()
+            .getBlockNumber()
+            .then(setHead)
+            .catch(() => setHead(null))
+    }, [])
+
+    if (!wallet) {
+        return (
+            <ConnectPrompt title="Borrowing follows your wallet.">
+                The credit line is bound to the address whose history was proved. Connect to see your limit and draw against it.
+            </ConnectPrompt>
+        )
+    }
     if (!snapshot) return <Loading />
 
     const { decimals, symbol } = snapshot.asset
@@ -20,6 +44,9 @@ export default function BorrowPage() {
     const headroom = snapshot.limit > snapshot.loan.principal ? snapshot.limit - snapshot.loan.principal : 0n
     const drawable = headroom < snapshot.vault.availableLiquidity ? headroom : snapshot.vault.availableLiquidity
     const interestAtTerm = (value: bigint) => (value * BigInt(snapshot.vault.borrowAprBps) * TERM_BLOCKS) / (10_000n * BLOCKS_PER_YEAR)
+    const locked = snapshot.score < snapshot.minScore
+    const repaymentsNeeded = Math.ceil((snapshot.minScore - snapshot.score) / SCORE.perRepayment)
+    const blocksLeft = snapshot.loan.active && head !== null ? snapshot.loan.dueBlock - head : null
 
     return (
         <div className="grid gap-6 lg:grid-cols-5">
@@ -33,7 +60,9 @@ export default function BorrowPage() {
                     <p className="text-muted-foreground mt-2 text-sm">
                         {tier.multiplier > 0
                             ? `Score ${snapshot.score} puts you in the ${tier.label.toLowerCase()} band — ${tier.multiplier}× the base unit, with no collateral posted.`
-                            : `A score of ${snapshot.minScore} opens the first band. Prove more repayment history to get there.`}
+                            : snapshot.known
+                              ? `Score ${snapshot.score}. The first band opens at ${snapshot.minScore} — about ${repaymentsNeeded} more counted ${repaymentsNeeded === 1 ? 'repayment' : 'repayments'}, each at least ${SCORE.minBlockGap.toLocaleString()} Ethereum blocks apart.`
+                              : `No attested history yet. Prove a repayment on Aave V3, Spark or Morpho Blue to start at 325; the first band opens at ${snapshot.minScore}.`}
                     </p>
 
                     <dl className="mt-8 grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-4">
@@ -80,7 +109,21 @@ export default function BorrowPage() {
                 </Card>
             </div>
 
-            <div className="lg:col-span-2">
+            <div className="space-y-6 lg:col-span-2">
+                {locked && !snapshot.loan.active ? (
+                    <>
+                        <ProveHistory />
+                        <p className="text-muted-foreground text-xs">
+                            Every counted repayment is worth {SCORE.perRepayment} points. See the full formula on your{' '}
+                            <Link
+                                href="/app"
+                                className="hover:text-foreground underline">
+                                passport
+                            </Link>
+                            .
+                        </p>
+                    </>
+                ) : (
                 <Card className="p-5">
                     <div className="flex items-center justify-between">
                         <div className="text-lg font-semibold tracking-tight">Borrow</div>
@@ -93,7 +136,7 @@ export default function BorrowPage() {
                     </div>
                     <div className="text-muted-foreground mt-1 text-sm">
                         {snapshot.loan.active
-                            ? `${formatAmount(snapshot.loan.principal, decimals)} ${symbol} principal · due at block #${snapshot.loan.dueBlock.toLocaleString()}`
+                            ? `${formatAmount(snapshot.loan.principal, decimals)} ${symbol} principal · ${blocksLeft === null ? `due at block #${snapshot.loan.dueBlock.toLocaleString()}` : dueText(blocksLeft)}`
                             : 'No open loan.'}
                     </div>
 
@@ -116,7 +159,7 @@ export default function BorrowPage() {
                                             ? 'Repay the open loan before drawing again.'
                                             : headroom === 0n
                                               ? 'No headroom on this score.'
-                                              : 'Connect this address to borrow against it.'
+                                              : 'Connect a wallet to borrow.'
                                     }
                                     hint="Draws against your proved history. Nothing is posted as collateral."
                                     summary={(value) => (
@@ -144,7 +187,7 @@ export default function BorrowPage() {
                                     label="Repay"
                                     max={snapshot.owed < snapshot.asset.balance ? snapshot.owed : snapshot.asset.balance}
                                     disabled={!owns || !snapshot.loan.active}
-                                    disabledReason={snapshot.loan.active ? 'Connect this address to repay it.' : 'No open loan.'}
+                                    disabledReason={snapshot.loan.active ? 'Connect a wallet to repay.' : 'No open loan.'}
                                     hint="Repaying in full on time adds to your score. Interest is settled at repayment."
                                     summary={(value) => (
                                         <>
@@ -174,6 +217,7 @@ export default function BorrowPage() {
                         )}
                     </div>
                 </Card>
+                )}
             </div>
         </div>
     )

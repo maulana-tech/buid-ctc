@@ -162,14 +162,15 @@ no state.
 | Route | What it does |
 | --- | --- |
 | `/` | Landing page. Its figures strip — passports scored, entries proved, vault size, supply APR, utilisation, open offers — is read from the deployed contracts through the same loaders the dashboard uses |
-| `/app` | **Passport.** Score, tier, profile, and the attested history — each row expands to its provenance: source chain, block (linked to Etherscan), emitting pool, query id, Creditcoin proof tx |
+| `/app` | **Passport.** The connected wallet's score, the registry formula term by term (base, repayments, tenure, penalties), points to the next band, recent proofs, and a public link + JSON API. Any address can be looked up read-only |
 | `/app/portfolio` | **Portfolio** for the connected wallet: net position, allocation across wallet / vault / market escrow, what needs attention (loan due or overdue, score below the line, capital locked in loans, offers above NAV) with a button to the right page, four summary cards, and one activity timeline merged from every contract the wallet touched |
-| `/app/directory` | Every passport in the registry, read from its own events. Discovery, not just lookup |
-| `/app/borrow` | Credit line by tier, borrow and repay, what a default costs |
+| `/app/history` | **History.** Every transaction the wallet has proved, each row expanding to its provenance (source block on Etherscan, emitting pool, query id, Creditcoin proof tx) — and **Prove a transaction**: paste an Ethereum tx hash, the app detects the pool and event, fetches the Attestcoin proof, and your wallet submits it to the ASC. The registry's own events say whether it counted |
+| `/app/borrow` | Credit line by tier, borrow and repay with interest and headroom projections, due date in days. Below the line, the page becomes the prove-a-transaction flow, with how many counted repayments are needed |
 | `/app/earn` | Supply APR and where it comes from; line chart of share price / vault size / utilisation; the connected wallet's position with yield against its entry price; supply and withdraw in one card |
 | `/app/withdraw` | Redeem shares, with the liquidity cap shown up front |
 | `/app/swap` | Share market as a swap: TradingView candlestick chart of redemption value and trades; "you pay / you receive" plans across the cheapest listed offers with a partial fill on the last, so X means exactly X |
 | `GET /api/score/<address>` | The score and history as JSON. No key, no signup |
+| `POST /api/proof` `{ txHash }` | Detects the pool and event in an Ethereum transaction and returns the Attestcoin proof ready for `LendingHistoryASC.submit()`. The browser signs; the server never holds a key |
 
 Every address and every proof transaction links to Blockscout. Wallets are discovered via EIP-6963
 (Credit Wallet is a mobile app with an in-app browser, not a desktop extension), and the dashboard
@@ -303,7 +304,7 @@ contracts/         CreditRegistry, LendingHistoryASC, CreditLine, ShareMarket, T
 test/              54 Foundry tests · fixtures/ real mainnet proofs · mocks/ the 0xFD2 stand-in
 worker/            protocols.ts (one source of truth), index.ts, check-sigs.ts, check-attestation.ts
 script/            deploy-testnet.ts, local.ts, prove.ts, register-protocols.ts, make-fixtures.ts, check-abi.ts, Deploy.s.sol
-web/               Next.js — landing (/) and dashboard (/app/*: passport, portfolio, directory, borrow, earn, withdraw, swap), lightweight-charts, EIP-6963 wallets
+web/               Next.js — landing (/) and dashboard (/app/*: passport, portfolio, history, borrow, earn, withdraw, swap), /api/score and /api/proof, lightweight-charts, EIP-6963 wallets
 DEPLOY.md          the testnet walkthrough
 ```
 
@@ -331,7 +332,7 @@ DEPLOY.md          the testnet walkthrough
 
 | Built in | Equivalent | Note |
 | --- | --- | --- |
-| Passport directory | PenguinBase-style discovery | read from registry events |
+| Borrower book on Earn | PenguinBase-style discovery | read from registry events |
 | Proof provenance per row | a block explorer for our own data | source block linked to Etherscan |
 | Public score API | Credal's on-chain credit API | a primitive nobody can call is just an app |
 | Share market | PenguinSwap, for something only this app has | an escrowed order book, not an AMM — NAV is already exact |

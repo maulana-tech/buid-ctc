@@ -1,14 +1,15 @@
 'use client'
 
+import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
 import { BrowserProvider, Contract } from 'ethers'
-import { Loader2 } from 'lucide-react'
+import { Loader2, Wallet } from 'lucide-react'
 
 import { AmountPanel, Faucet, Loading, ModeToggle, Notice, Row, Stat, Summary, parseSafe, plain, useApp } from '@/components/app-shell'
 import { VaultChart } from '@/components/vault-chart'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { ADDRESSES, ERC20_ABI, LINE_ABI, formatAmount, formatPercent, loadVaultHistory, loadVaultPosition, shorten, type VaultHistory, type VaultPosition } from '@/lib/creditpass'
+import { ADDRESSES, ERC20_ABI, LINE_ABI, formatAmount, formatPercent, loadDirectory, loadVaultHistory, loadVaultPosition, shorten, tierOf, type DirectoryEntry, type VaultHistory, type VaultPosition } from '@/lib/creditpass'
 import { ensureCreditcoinNetwork } from '@/lib/wallet'
 
 /** Blocks per year on Creditcoin at ~15s. Mirrors CreditLine.BLOCKS_PER_YEAR. */
@@ -25,6 +26,7 @@ export default function EarnPage() {
     const { snapshot, wallet, provider, refresh } = useApp()
     const [position, setPosition] = useState<VaultPosition | null>(null)
     const [history, setHistory] = useState<VaultHistory | null>(null)
+    const [book, setBook] = useState<DirectoryEntry[] | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [busy, setBusy] = useState<string | null>(null)
 
@@ -37,6 +39,9 @@ export default function EarnPage() {
         loadVaultHistory()
             .then(setHistory)
             .catch(() => setHistory(null))
+        loadDirectory()
+            .then(setBook)
+            .catch(() => setBook([]))
     }, [])
 
     if (!snapshot) return <Loading />
@@ -159,6 +164,52 @@ export default function EarnPage() {
                         <Row label="Exit when fully lent" value="Sell on Swap" />
                     </div>
                 </Card>
+
+                <Card className="p-6">
+                    <div className="flex items-baseline justify-between">
+                        <div className="font-medium">Who the vault lends to</div>
+                        <div className="text-muted-foreground text-xs">{book ? `${book.filter((b) => b.score >= snapshot.minScore).length} eligible of ${book.length} scored` : '…'}</div>
+                    </div>
+                    <p className="text-muted-foreground mt-1 text-sm">Every address with attested history, from the registry&apos;s own events. Your yield is underwritten by these records.</p>
+                    {!book ? (
+                        <Loading what="the registry" />
+                    ) : book.length === 0 ? (
+                        <p className="text-muted-foreground py-6 text-sm">No passports yet.</p>
+                    ) : (
+                        <div className="mt-4 overflow-x-auto">
+                            <table className="w-full min-w-125 text-sm">
+                                <thead className="text-muted-foreground text-left text-xs">
+                                    <tr className="*:pb-2 *:font-normal">
+                                        <th>Address</th>
+                                        <th>Score</th>
+                                        <th>Band</th>
+                                        <th className="text-right">Repayments</th>
+                                        <th className="text-right">Liquidations</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y">
+                                    {book.slice(0, 8).map((entry) => (
+                                        <tr
+                                            key={entry.address}
+                                            className="*:py-2.5 tabular-nums">
+                                            <td>
+                                                <Link
+                                                    href={`/app?address=${entry.address}`}
+                                                    className="hover:text-foreground font-mono text-xs">
+                                                    {shorten(entry.address)}
+                                                </Link>
+                                            </td>
+                                            <td className="font-medium">{entry.score}</td>
+                                            <td className="text-muted-foreground">{tierOf(entry.score, snapshot.minScore).label}</td>
+                                            <td className="text-right">{entry.repayments}</td>
+                                            <td className={`text-right ${entry.liquidations > 0 ? 'text-amber-600' : ''}`}>{entry.liquidations}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </Card>
             </div>
 
             <div className="lg:col-span-2">
@@ -176,6 +227,18 @@ export default function EarnPage() {
                 />
             </div>
         </div>
+    )
+}
+
+function ConnectButton() {
+    const { connect } = useApp()
+    return (
+        <Button
+            size="sm"
+            className="mt-3"
+            onClick={connect}>
+            <Wallet /> Connect wallet
+        </Button>
     )
 }
 
@@ -264,9 +327,10 @@ function PositionCard({
                     </dl>
                 </>
             ) : (
-                <p className="text-muted-foreground mt-3 text-sm">
-                    Connect a wallet to see what you hold and what it has earned. Everything on the left is readable without one.
-                </p>
+                <div className="mt-3">
+                    <p className="text-muted-foreground text-sm">Connect a wallet to see what you hold and what it has earned. Everything on the left is readable without one.</p>
+                    <ConnectButton />
+                </div>
             )}
 
             <div className="mt-6 border-t pt-5">

@@ -98,7 +98,7 @@ export default function WithdrawPage() {
                             max={vault.maxWithdraw}
                             disabled={!owns || vault.maxWithdraw === 0n}
                             disabledReason={
-                                vault.maxWithdraw === 0n ? 'Nothing withdrawable — the pool is fully lent out or you hold no shares.' : 'Connect this address to withdraw from it.'
+                                vault.maxWithdraw === 0n ? 'Nothing withdrawable — the pool is fully lent out or you hold no shares.' : 'Connect a wallet to withdraw.'
                             }
                             hint="Burns shares for the asset at the current share price. Capped by cash on hand; the rest can be sold on Swap."
                             summary={(value) => (
